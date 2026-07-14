@@ -36,6 +36,13 @@ func GSwebserverStart(port int) {
 	basePath := GetBasePath()
 	fmt.Println("Webserver is listening on : " + ggport + " (base path: " + basePath + ")")
 	gatesentry2storage.SetBaseDir(GSBASEDIR)
+	// Initialize the JWT signing secret before any auth middleware can run.
+	// Fails fast if we cannot persist the secret — better than silently
+	// shipping JWTs that anyone could forge because the key is well-known.
+	if err := gatesentryWebserver.InitJWTSecret(GSBASEDIR); err != nil {
+		fmt.Println("Failed to initialize JWT secret:", err)
+		return
+	}
 	R.GSWebSettings = gatesentry2storage.NewMapStore("GSWebSettings", true)
 
 	runtimeArgs := gatesentryWebserverTypes.InputArgs{

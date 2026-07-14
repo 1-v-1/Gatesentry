@@ -2,11 +2,16 @@ package gatesentryWebserver
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
 	"mime"
 	"net/http"
+	"os"
+	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -23,7 +28,81 @@ import (
 	"github.com/gorilla/mux"
 )
 
-var hmacSampleSecret = []byte("I7JE72S9XJ48ANXMI78ASDNMQ839")
+// hmacSecret is the HS256 key used to sign and verify session JWTs. It is no
+// longer hardcoded — it is generated on first start and persisted to
+// <basedir>/jwt.secret with mode 0600. InitJWTSecret must be called before any
+// request that may invoke CreateToken or authenticationMiddleware.
+var hmacSecret []byte
+
+const jwtSecretFileName = "jwt.secret"
+
+// InitJWTSecret loads the HMAC signing key from <basedir>/jwt.secret. If the
+// file does not exist, a fresh 32-byte cryptographically random key is
+// generated, written with 0600 permissions, and held in memory. Returns an
+// error only if basedir is unusable AND a generated key could not be kept
+// somewhere readable — in that case callers should refuse to start.
+func InitJWTSecret(basedir string) error {
+	if basedir == "" {
+		basedir = "."
+	}
+	if err := os.MkdirAll(basedir, 0o700); err != nil {
+		return fmt.Errorf("cannot create basedir for jwt secret: %w", err)
+	}
+	path := filepath.Join(basedir, jwtSecretFileName)
+
+	if data, err := os.ReadFile(path); err == nil {
+		raw, decErr := hex.DecodeString(strings.TrimSpace(string(data)))
+		if decErr == nil && len(raw) >= 32 {
+			hmacSecret = raw
+			log.Printf("JWT secret loaded from %s (%d bytes)", path, len(raw))
+			return nil
+		}
+		log.Printf("JWT secret at %s is missing or invalid; regenerating", path)
+	} else if !os.IsNotExist(err) {
+		log.Printf("could not read %s: %v; regenerating", path, err)
+	}
+
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return fmt.Errorf("crypto/rand failed: %w", err)
+	}
+	hmacSecret = buf
+	encoded := hex.EncodeToString(buf) + "\n"
+	if err := os.WriteFile(path, []byte(encoded), 0o600); err != nil {
+		return fmt.Errorf("cannot persist jwt secret to %s: %w", path, err)
+	}
+	log.Printf("Generated new JWT secret and persisted to %s (mode 0600)", path)
+	return nil
+}
+
+func getJWTSecret() []byte {
+	if len(hmacSecret) == 0 {
+		// Defensive: bail loudly rather than silently fall back to a public key.
+		panic("gatesentryWebserver: JWT secret not initialized — call InitJWTSecret first")
+	}
+	return hmacSecret
+}
+
+// panicRecoveryMiddleware converts any panic in downstream handlers into a 500
+// JSON response so clients see a stable error surface and the server log gets
+// the stack instead of the net/http default (which leaks the stack to stderr
+// and still keeps the goroutine dead).
+var panicRecoveryMiddleware mux.MiddlewareFunc = func(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				log.Printf("panic recovered in %s %s: %v\n%s",
+					r.Method, r.URL.Path, rec, debug.Stack())
+				// Guard against partial writes — check whether the response is
+				// already partially committed before writing again.
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = w.Write([]byte(`{"status":500,"message":"internal server error"}` + "\n"))
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
+}
 
 type User struct {
 	Username string `json:"username"`
@@ -49,7 +128,7 @@ func CreateToken(username string) (string, error) {
 	})
 
 	// Sign and get the complete encoded token as a string using the secret
-	tokenString, err := token.SignedString(hmacSampleSecret)
+	tokenString, err := token.SignedString(getJWTSecret())
 
 	return tokenString, err
 }
@@ -100,17 +179,32 @@ var authenticationMiddleware mux.MiddlewareFunc = func(next http.Handler) http.H
 				return nil, fmt.Errorf("Unexpected signing method: %v", token.Header["alg"])
 			}
 
-			return hmacSampleSecret, nil
+			return getJWTSecret(), nil
 		})
-
-		if claims, ok := token.Claims.(jwt.MapClaims); ok && token.Valid {
-			ctx := context.WithValue(r.Context(), "username", claims["username"].(string))
-			log.Println("Logged in with username = ", claims["username"])
-			next.ServeHTTP(w, r.WithContext(ctx))
-		} else {
+		// jwt.Parse returns (nil, err) when the token cannot be parsed at all
+		// (malformed, bad signature with strict alg, alg=none, etc.). Without
+		// this guard, every such request dereferences a nil *Token and panics.
+		if err != nil || token == nil || !token.Valid {
 			SendError(w, err, http.StatusUnauthorized)
 			return
 		}
+
+		claims, ok := token.Claims.(jwt.MapClaims)
+		if !ok {
+			SendError(w, errors.New("Invalid claims type"), http.StatusUnauthorized)
+			return
+		}
+		// Comma-ok avoids a second class of panic: a valid signature that lacks
+		// a usable username claim (interface conversion: nil).
+		username, ok := claims["username"].(string)
+		if !ok || username == "" {
+			SendError(w, errors.New("Missing username claim"), http.StatusUnauthorized)
+			return
+		}
+
+		ctx := context.WithValue(r.Context(), "username", username)
+		log.Println("Logged in with username = ", username)
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
@@ -411,8 +505,26 @@ func RegisterEndpointsStartServer(
 	// We only strip the basePath prefix (not /fs), so the remaining path /fs/bundle.js
 	// correctly maps to fs/bundle.js in the embedded filesystem.
 	fsHandler := http.FileServer(gatesentryWebserverFrontend.GetFSHandler())
+	// Wrap the file server so:
+	//   1. Content-Type is set explicitly from the URL extension for known asset
+	//      types, instead of relying on Go's sniffed fallback (which can return
+	//      text/plain for short CSS files whose first 512 bytes do not look
+	//      distinctively like CSS — browsers then refuse to apply the stylesheet).
+	//   2. 404s return a small JSON body with Content-Type application/json,
+	//      rather than Go's default text/plain "404 page not found", which can
+	//      otherwise be misread by a strict browser as a malformed response.
+	staticHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if ct := mime.TypeByExtension(filepath.Ext(r.URL.Path)); ct != "" {
+			w.Header().Set("Content-Type", ct)
+		}
+		fsHandler.ServeHTTP(w, r)
+	})
+	// Strip only the basePath prefix (not /fs), so the remaining path
+	// /fs/style2.css maps to fs/style2.css in the embedded filesystem
+	// (which is rooted at files/, i.e. files/fs/style2.css).
+	// For basePath "/", TrimSuffix yields "" and StripPrefix is a no-op.
 	internalServer.sub.PathPrefix("/fs/").Handler(
-		http.StripPrefix("/fs/", fsHandler),
+		http.StripPrefix(strings.TrimSuffix(basePath, "/"), staticHandler),
 	)
 
 	baseIndexHandler := makeIndexHandler(basePath)

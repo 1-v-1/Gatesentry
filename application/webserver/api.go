@@ -16,6 +16,9 @@ type HttpHandlerFunc func(http.ResponseWriter, *http.Request)
 
 func NewGsWeb(basePath string) *GsWeb {
 	root := mux.NewRouter()
+	// Wrap every request in panic recovery so a single bad handler does not
+	// leak goroutine-level stack traces to stderr (or worse, to clients).
+	root.Use(panicRecoveryMiddleware)
 
 	var sub *mux.Router
 	if basePath == "/" {
