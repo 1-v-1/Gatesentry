@@ -46,22 +46,24 @@ jobs:
           echo "Building ipks for tag v${TAG}"
 
       - name: Pull OpenWrt SDK container
-        run: |
-          echo "Pulling openwrt/sdk:${{ matrix.sdk_tag }}"
-          docker pull openwrt/sdk:${{ matrix.sdk_tag }}
+        run: docker pull openwrt/sdk:${{ matrix.sdk_tag }}
 
+      # NOTE: do not mount a volume over /sdk inside the container — the
+      # OpenWrt SDK image's /sdk is the SDK installation root and is not
+      # writable by the runner user. Use /tmp/sdk as the build root instead.
       - name: Compile ipk packages
         run: |
           docker run --rm \
             -v "${{ github.workspace }}/package":/src/package:ro \
-            -v openwrt-sdk-build-${{ matrix.board }}:/sdk \
+            -v "${{ github.workspace }}/.openwrt-out":/out \
             openwrt/sdk:${{ matrix.sdk_tag }} \
-            sh -c '
+            bash -c '
               set -e
               set -x
-              mkdir -p /sdk
-              cp -r /src/package /sdk/package
-              cd /sdk
+              BUILD=/tmp/sdk
+              mkdir -p "$BUILD"
+              cp -r /src/package "$BUILD/package"
+              cd "$BUILD"
 
               echo "=== feeds update ==="
               ./scripts/feeds update -a
@@ -74,31 +76,16 @@ jobs:
               make package/luci-app-gatesentry/compile V=s 2>&1 | tail -80
 
               echo "=== produced ipks ==="
-              find bin/packages -name "*.ipk"
-            '
-
-      - name: Stage compiled ipks
-        id: ipks
-        run: |
-          mkdir -p dist
-          docker run --rm \
-            -v openwrt-sdk-build-${{ matrix.board }}:/sdk:ro \
-            -v "${{ github.workspace }}/dist":/dist \
-            openwrt/sdk:${{ matrix.sdk_tag }} \
-            sh -c '
-              mkdir -p /dist
-              find /sdk/bin/packages -name "gatesentry_*.ipk" -o -name "luci-app-gatesentry_*.ipk" | while read f; do
-                echo "staging $f"
-                cp "$f" /dist/
-              done
-              ls -la /dist/
+              find bin/packages -name "*.ipk" -print
+              cp -v bin/packages/*/*.ipk /out/ 2>/dev/null || true
+              ls -la /out/
             '
 
       - name: Upload ipks as workflow artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ipk-${{ matrix.board }}
-          path: dist/*.ipk
+          path: .openwrt-out/*.ipk
           if-no-files-found: error
           retention-days: 14
 
@@ -108,10 +95,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.version.outputs.tag }}
         run: |
-          if [ ! -d dist ] || [ -z "$(ls -A dist/*.ipk 2>/dev/null)" ]; then
+          if [ ! -d .openwrt-out ] || [ -z "$(ls -A .openwrt-out/*.ipk 2>/dev/null)" ]; then
             echo "::error::no ipks produced for ${{ matrix.board }}"
             exit 1
           fi
-          gh release upload "$TAG" dist/*.ipk \
+          gh release upload "$TAG" .openwrt-out/*.ipk \
             --repo "${{ github.repository }}" \
             --clobber
