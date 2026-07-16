@@ -48,22 +48,24 @@ jobs:
       - name: Pull OpenWrt SDK container
         run: docker pull openwrt/sdk:${{ matrix.sdk_tag }}
 
-      # NOTE: do not mount a volume over /sdk inside the container — the
-      # OpenWrt SDK image's /sdk is the SDK installation root and is not
-      # writable by the runner user. Use /tmp/sdk as the build root instead.
+      # The OpenWrt SDK image runs as the non-root 'builder' user by default,
+      # which cannot write to /sdk. Force root via --user root so we can drop
+      # our package definitions into /sdk/package/. The resulting ipks are
+      # copied out to /out (mounted from $GITHUB_WORKSPACE/.openwrt-out) for
+      # actions/upload-artifact to pick up.
       - name: Compile ipk packages
         run: |
-          docker run --rm \
+          mkdir -p "${{ github.workspace }}/.openwrt-out"
+          docker run --rm --user root \
             -v "${{ github.workspace }}/package":/src/package:ro \
             -v "${{ github.workspace }}/.openwrt-out":/out \
             openwrt/sdk:${{ matrix.sdk_tag }} \
             bash -c '
               set -e
               set -x
-              BUILD=/tmp/sdk
-              mkdir -p "$BUILD"
-              cp -r /src/package "$BUILD/package"
-              cd "$BUILD"
+              # Drop our package definitions directly into /sdk/package/.
+              cp -r /src/package/* /sdk/package/
+              cd /sdk
 
               echo "=== feeds update ==="
               ./scripts/feeds update -a
