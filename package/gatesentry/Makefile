@@ -24,7 +24,7 @@ ifeq ($(GS_BIN),)
 GS_BIN:=gatesentry-linux
 endif
 
-PKG_SOURCE:=https://github.com/fifthsegment/Gatesentry/releases/download/v$(PKG_VERSION)/$(GS_BIN)
+PKG_SOURCE:=https://github.com/1-v-1/Gatesentry/releases/download/v$(PKG_VERSION)/$(GS_BIN)
 PKG_HASH:=skip
 
 include $(INCLUDE_DIR)/package.mk

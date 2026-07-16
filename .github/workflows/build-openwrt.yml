@@ -8,41 +8,31 @@ on:
   workflow_dispatch:
     inputs:
       target:
-        description: "Target architecture (matches OpenWrt SDK tag, e.g. x86_64, aarch64-cortex-a53)"
+        description: "Target tag suffix (matches OpenWrt SDK image, e.g. x86_64, aarch64_cortex-a53, ramips-mt7621)"
         required: false
         default: "x86_64"
-      release:
-        description: "OpenWrt release tag (e.g. 23.05.3)"
-        required: false
-        default: "23.05.3"
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
         include:
-          # Each entry pairs the OpenWrt SDK tag (per docs:
-          # https://hub.docker.com/r/openwrt/sdk/tags) with the
-          # BOARD identifier the gatesentry Makefile maps to.
-          - openwrt_target: x86_64
+          # Each entry pairs the OpenWrt SDK Docker image tag (verified to
+          # exist on hub.docker.com/r/openwrt/sdk) with the BOARD identifier
+          # the gatesentry Makefile maps to the release asset suffix.
+          - sdk_tag: x86_64-23.05.6
             board: x86_64
-            sdk_tag: x86_64-23.05.3
-          - openwrt_target: aarch64-cortex-a53
+          - sdk_tag: aarch64_cortex-a53-23.05.6
             board: aarch64_cortex-a53
-            sdk_tag: armsr-armv8-23.05.3
-          - openwrt_target: mipsel-24kc
+          - sdk_tag: ramips-mt7621-23.05.6
             board: mipsel_24kc
-            sdk_tag: ath79_generic-23.05.3
-          - openwrt_target: arm-cortex-a7
+          - sdk_tag: arm_cortex-a7_neon-vfpv4-23.05.6
             board: arm_cortex-a7
-            sdk_tag: ipq40xx_generic-23.05.3
 
     steps:
       - name: Check out code
@@ -53,54 +43,52 @@ jobs:
         run: |
           TAG=$(awk -F'"' '/var GATESENTRY_VERSION =/ { print $2 }' main.go)
           echo "tag=v${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Building ipks for tag v${TAG}"
 
       - name: Pull OpenWrt SDK container
-        run: docker pull openwrt/sdk:${{ matrix.sdk_tag }}
-
-      - name: Stage package files in SDK
         run: |
-          docker run --rm \
-            -v "${{ github.workspace }}/package":/src/package:ro \
-            openwrt/sdk:${{ matrix.sdk_tag }} \
-            sh -c '
-              set -e
-              mkdir -p /tmp/sdkroot
-              cp -r /src/package /tmp/sdkroot/package
-              ls -la /tmp/sdkroot/package/
-            '
+          echo "Pulling openwrt/sdk:${{ matrix.sdk_tag }}"
+          docker pull openwrt/sdk:${{ matrix.sdk_tag }}
 
       - name: Compile ipk packages
         run: |
           docker run --rm \
             -v "${{ github.workspace }}/package":/src/package:ro \
-            -v openwrt-sdk-build:/sdk \
+            -v openwrt-sdk-build-${{ matrix.board }}:/sdk \
             openwrt/sdk:${{ matrix.sdk_tag }} \
             sh -c '
               set -e
+              set -x
               mkdir -p /sdk
               cp -r /src/package /sdk/package
               cd /sdk
-              # Some SDK images need a one-time feeds update + install.
-              ./scripts/feeds update -a || true
-              ./scripts/feeds install -a || true
-              make package/gatesentry/compile V=s \
-                   package/luci-app-gatesentry/compile V=s || {
-                echo "::warning::compile failed for ${{ matrix.openwrt_target }}"
-                exit 1
-              }
-              find bin/packages -name "*.ipk" -print
+
+              echo "=== feeds update ==="
+              ./scripts/feeds update -a
+              echo "=== feeds install ==="
+              ./scripts/feeds install -a
+
+              echo "=== compile gatesentry ==="
+              make package/gatesentry/compile V=s 2>&1 | tail -80
+              echo "=== compile luci-app-gatesentry ==="
+              make package/luci-app-gatesentry/compile V=s 2>&1 | tail -80
+
+              echo "=== produced ipks ==="
+              find bin/packages -name "*.ipk"
             '
 
       - name: Stage compiled ipks
         id: ipks
         run: |
+          mkdir -p dist
           docker run --rm \
-            -v openwrt-sdk-build:/sdk:ro \
+            -v openwrt-sdk-build-${{ matrix.board }}:/sdk:ro \
             -v "${{ github.workspace }}/dist":/dist \
             openwrt/sdk:${{ matrix.sdk_tag }} \
             sh -c '
               mkdir -p /dist
               find /sdk/bin/packages -name "gatesentry_*.ipk" -o -name "luci-app-gatesentry_*.ipk" | while read f; do
+                echo "staging $f"
                 cp "$f" /dist/
               done
               ls -la /dist/
@@ -109,9 +97,9 @@ jobs:
       - name: Upload ipks as workflow artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ipk-${{ matrix.openwrt_target }}
+          name: ipk-${{ matrix.board }}
           path: dist/*.ipk
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 14
 
       - name: Attach ipks to GitHub release
@@ -121,9 +109,9 @@ jobs:
           TAG: ${{ steps.version.outputs.tag }}
         run: |
           if [ ! -d dist ] || [ -z "$(ls -A dist/*.ipk 2>/dev/null)" ]; then
-            echo "::warning::no ipks produced for ${{ matrix.openwrt_target }}, skipping release upload"
-            exit 0
+            echo "::error::no ipks produced for ${{ matrix.board }}"
+            exit 1
           fi
           gh release upload "$TAG" dist/*.ipk \
             --repo "${{ github.repository }}" \
-            --clobber || echo "::warning::release upload failed for ${{ matrix.openwrt_target }}"
+            --clobber
