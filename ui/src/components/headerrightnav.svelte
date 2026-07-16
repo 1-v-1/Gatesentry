@@ -1,6 +1,7 @@
 <script lang="ts">
   import { store } from "../store/apistore";
-  import { _ } from "svelte-i18n";
+  import { _, locale } from "svelte-i18n";
+  import { setLocale, SUPPORTED_LOCALES } from "../language/i18n";
 
   export let userProfilePanelOpen;
   import {
@@ -17,13 +18,18 @@
     ModalFooter,
     ModalHeader,
   } from "carbon-components-svelte";
-  import { SettingsAdjust, UserAvatarFilledAlt } from "carbon-icons-svelte";
+  import {
+    Language,
+    SettingsAdjust,
+    UserAvatarFilledAlt,
+  } from "carbon-icons-svelte";
   import { afterUpdate } from "svelte";
   import ConnectedGeneralSettingInputs from "./connectedGeneralSettingInputs.svelte";
   import { gsNavigate } from "../lib/navigate";
 
   $: loggedIn = $store.api.loggedIn;
   let checked = false;
+  let languagePanelOpen = false;
 
   let bindedUpdate;
   let modalOpen;
@@ -38,6 +44,26 @@
 </script>
 
 <HeaderUtilities>
+  <HeaderAction
+    bind:isOpen={languagePanelOpen}
+    icon={Language}
+    closeIcon={Language}
+  >
+    <HeaderPanelLinks>
+      <HeaderPanelDivider>{$_("Language")}</HeaderPanelDivider>
+      {#each SUPPORTED_LOCALES as l}
+        <HeaderPanelLink
+          on:click={() => {
+            setLocale(l.code);
+            languagePanelOpen = false;
+          }}
+        >
+          {l.label}{$locale === l.code ? " ✓" : ""}
+        </HeaderPanelLink>
+      {/each}
+    </HeaderPanelLinks>
+  </HeaderAction>
+
   {#if loggedIn}
     <HeaderAction
       bind:isOpen={userProfilePanelOpen}
@@ -45,13 +71,13 @@
       closeIcon={UserAvatarFilledAlt}
     >
       <HeaderPanelLinks>
-        <HeaderPanelDivider>Logged in as admin</HeaderPanelDivider>
+        <HeaderPanelDivider>{$_("Logged in as admin")}</HeaderPanelDivider>
         <HeaderPanelLink
           on:click={() => {
             modalOpen = true;
           }}>{$_("Change password")}</HeaderPanelLink
         >
-        <HeaderPanelLink on:click={onLogout}>Logout</HeaderPanelLink>
+        <HeaderPanelLink on:click={onLogout}>{$_("Logout")}</HeaderPanelLink>
       </HeaderPanelLinks>
     </HeaderAction>
 
@@ -72,7 +98,7 @@
         {/if}
       </ModalBody>
       <ModalFooter
-        secondaryButtonText="Proceed"
+        secondaryButtonText={$_("Proceed")}
         primaryButtonDisabled={true}
         secondaryClass="button--primary"
         on:click:button--secondary={() => {

@@ -1,0 +1,11 @@
+{
+  "Action": "Action",
+  "Blocked Types": "Blocked Types",
+  "Content Filtering": "Content Filtering",
+  "Description": "Description",
+  "Priority": "Priority",
+  "Rule": "Rule",
+  "SSL Inspection": "SSL Inspection",
+  "Time Restriction": "Time Restriction",
+  "URL Patterns": "URL Patterns"
+}

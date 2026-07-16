@@ -1,0 +1,17 @@
+{
+  "Add User": "添加用户",
+  "Allow Access": "允许访问",
+  "Allow access": "允许访问",
+  "Allow only registered users to access the proxy server": "仅允许已注册用户访问代理服务器",
+  "Are you sure you want to delete this user?": "确定要删除该用户吗？",
+  "Create User": "创建用户",
+  "Data Consumed": "已用流量",
+  "Deny access": "拒绝访问",
+  "Disable Internet Access": "禁用网络访问",
+  "Edit User": "编辑用户",
+  "Enable Internet Access": "启用网络访问",
+  "Error : ": "错误：",
+  "No users registered yet.": "尚未注册任何用户。",
+  "Save User": "保存用户",
+  "User": "用户"
+}

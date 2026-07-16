@@ -8,6 +8,7 @@
   import { store } from "../store/apistore";
   import { afterUpdate } from "svelte";
   import { gsNavigate } from "../lib/navigate";
+  import { _ } from "svelte-i18n";
   $: loggedIn = $store.api.loggedIn;
 
   let menuItemsToRender = [...menuItems];
@@ -24,16 +25,16 @@
   {#each menuItemsToRender as item}
     {#if item.type === "link"}
       <HeaderNavItem
-        text={item.text}
+        text={$_(item.text)}
         on:click={() => {
           gsNavigate(item.href);
         }}
       />
     {:else if item.type === "menu"}
-      <HeaderNavMenu text={item.text}>
+      <HeaderNavMenu text={$_(item.text)}>
         {#each item.children as child}
           <HeaderNavItem
-            text={child.text}
+            text={$_(child.text)}
             on:click={() => {
               gsNavigate(child.href);
             }}

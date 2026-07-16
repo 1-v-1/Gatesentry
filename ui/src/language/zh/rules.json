@@ -1,0 +1,11 @@
+{
+  "Action": "动作",
+  "Blocked Types": "屏蔽类型",
+  "Content Filtering": "内容过滤",
+  "Description": "描述",
+  "Priority": "优先级",
+  "Rule": "规则",
+  "SSL Inspection": "SSL 检测",
+  "Time Restriction": "时间限制",
+  "URL Patterns": "URL 匹配规则"
+}

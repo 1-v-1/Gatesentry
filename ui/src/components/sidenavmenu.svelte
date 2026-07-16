@@ -9,6 +9,7 @@
   import { store } from "../store/apistore";
   import { afterUpdate } from "svelte";
   import { gsNavigate } from "../lib/navigate";
+  import { _ } from "svelte-i18n";
   $: loggedIn = $store.api.loggedIn;
 
   let menuItemsToRender = [...menuItems];
@@ -26,18 +27,18 @@
     {#if item.type === "link"}
       <SideNavLink
         icon={item.icon}
-        text={item.text}
+        text={$_(item.text)}
         isSelected={item.isSelected}
         on:click={() => {
           gsNavigate(item.href);
         }}
       />
     {:else if item.type === "menu"}
-      <SideNavMenu icon={item.icon} text={item.text}>
+      <SideNavMenu icon={item.icon} text={$_(item.text)}>
         {#each item.children as child}
           <SideNavLink
             icon={child.icon}
-            text={child.text}
+            text={$_(child.text)}
             on:click={() => {
               gsNavigate(child.href);
             }}

@@ -24,7 +24,8 @@
   import Stats from "./routes/stats/stats.svelte";
   import AI from "./routes/ai/ai.svelte";
 
-  import { register, init, _ } from "svelte-i18n";
+  import { _, isLoading } from "svelte-i18n";
+  import { setupI18n } from "./language/i18n";
   import Users from "./routes/users/users.svelte";
   import Globalheader from "./components/globalheader.svelte";
   import Rules from "./routes/rules/rules.svelte";
@@ -33,11 +34,19 @@
 
   let loaded = false;
   async function setup() {
-    register("en", () => import("./language/en.json"));
+    setupI18n();
 
     await Promise.allSettled([
-      // TODO: add some more stuff you want to init ...
-      init({ initialLocale: "en", fallbackLocale: "en" }),
+      // Wait until the initial locale's messages have finished loading so the
+      // first render is already translated (avoids a flash of raw keys).
+      new Promise<void>((resolve) => {
+        const unsub = isLoading.subscribe((v) => {
+          if (!v) {
+            resolve();
+            queueMicrotask(() => unsub());
+          }
+        });
+      }),
     ]);
     loaded = true;
     return true;
