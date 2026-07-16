@@ -1,0 +1,88 @@
+<%+header%>
+<h2><%:Status%></h2>
+<div id="gs-status-widget" class="cbi-section">
+	<p>
+		<span id="gs-running-badge" class="ifacebadge">…</span>
+		<span id="gs-version"></span>
+	</p>
+
+	<table class="table cbi-section-table" id="gs-ports-table">
+		<thead>
+			<tr><th><%:Port%></th><th><%:Purpose%></th><th><%:State%></th></tr>
+		</thead>
+		<tbody>
+			<tr data-port="10413">
+				<td>10413</td>
+				<td><%:HTTP proxy%></td>
+				<td class="gs-port-state">…</td>
+			</tr>
+			<tr data-port="10414">
+				<td>10414</td>
+				<td><%:Transparent proxy%></td>
+				<td class="gs-port-state">…</td>
+			</tr>
+			<tr data-port="10786">
+				<td>10786</td>
+				<td><%:Web admin%></td>
+				<td class="gs-port-state">…</td>
+			</tr>
+		</tbody>
+	</table>
+
+	<div class="cbi-section-actions">
+		<button class="cbi-button cbi-button-action" data-action="start"><%:Start%></button>
+		<button class="cbi-button cbi-button-neutral" data-action="stop"><%:Stop%></button>
+		<button class="cbi-button cbi-button-neutral" data-action="restart"><%:Restart%></button>
+	</div>
+</div>
+
+<script type="text/javascript">
+(function () {
+	var root = document.getElementById('gs-status-widget');
+	var badge = document.getElementById('gs-running-badge');
+	var versionSpan = document.getElementById('gs-version');
+
+	function setBadge(running) {
+		badge.textContent = running ? '<%:Running%>' : '<%:Stopped%>';
+		badge.className = 'ifacebadge ' + (running ? 'ifacebadge-running' : 'ifacebadge-stopped');
+	}
+
+	function renderPorts(ports) {
+		ports.forEach(function (p) {
+			var cell = root.querySelector('tr[data-port="' + p.port + '"] .gs-port-state');
+			if (cell) {
+				cell.textContent = p.listening ? '<%:Listening%>' : '<%:Not listening%>';
+			}
+		});
+	}
+
+	function refresh() {
+		var req = new XHR();
+		req.get('<%=luci.dispatcher.build_url("admin", "services", "gatesentry", "status")%>',
+			function (data) {
+				try {
+					var d = JSON.parse(data);
+					setBadge(d.running);
+					versionSpan.textContent = d.version ? ' · v' + d.version : '';
+					renderPorts(d.ports || []);
+				} catch (e) { /* ignore */ }
+			},
+			function () { setBadge(false); }
+		);
+	}
+
+	root.querySelectorAll('button[data-action]').forEach(function (btn) {
+		btn.addEventListener('click', function () {
+			var req = new XHR();
+			req.post('<%=luci.dispatcher.build_url("admin", "services", "gatesentry", "service")%>',
+				'action=' + btn.getAttribute('data-action'),
+				function () { setTimeout(refresh, 1500); }
+			);
+		});
+	});
+
+	refresh();
+	setInterval(refresh, 5000);
+}());
+</script>
+<%+footer%>

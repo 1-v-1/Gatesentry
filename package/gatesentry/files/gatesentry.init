@@ -1,0 +1,116 @@
+#!/bin/sh /etc/rc.common
+# GateSentry procd init script. Reads /etc/config/gatesentry and execs
+# /usr/lib/gatesentry/run.sh which cd's into /var/lib/gatesentry and execs
+# gatesentry-bin. UCI changes take effect on the next `start` (full restart —
+# the binary does not handle SIGHUP).
+
+USE_PROCD=1
+START=99
+STOP=10
+
+PROG=/usr/lib/gatesentry/run.sh
+
+start_service() {
+	local enabled http_port admin_port tp_port tp_enabled bind \
+	      dns_enabled dns_port dns_addr dns_resolver \
+	      tz debug max_scan mdns admin_lan_only
+
+	config_load gatesentry
+	config_get_bool enabled main enabled 0
+	[ "$enabled" = "1" ] || {
+		logger -t gatesentry "GateSentry is disabled in UCI"
+		return 0
+	}
+
+	config_get http_port main http_port "10413"
+	config_get admin_port main admin_port "10786"
+	config_get tp_port main transparent_port "10414"
+	config_get_bool tp_enabled main transparent 1
+	config_get bind main bind_address "0.0.0.0"
+	config_get_bool dns_enabled main dns_enabled 0
+	config_get dns_port main dns_port "53"
+	config_get dns_addr main dns_addr "0.0.0.0"
+	config_get dns_resolver main dns_resolver "1.1.1.1:53"
+	config_get tz main tz "UTC"
+	config_get_bool debug main debug_logging 0
+	config_get max_scan main max_scan_size_mb "10"
+	config_get_bool mdns main mdns_browser 0
+	config_get_bool admin_lan_only main admin_lan_only 1
+
+	# Make sure the data directory exists and is owned by the service user.
+	mkdir -p /var/lib/gatesentry/gatesentry/filterfiles
+	chown -R gatesentry:gatesentry /var/lib/gatesentry
+
+	procd_open_instance
+	procd_set_param command "$PROG"
+	procd_set_param user gatesentry
+	procd_set_param group gatesentry
+	procd_set_param respawn 3600 5 5
+	procd_set_param stdout 0
+	procd_set_param stderr 1
+	procd_set_param limits nofile="16384 32768"
+	# Transparent proxy requires IP_TRANSPARENT; procd grants the capability
+	# via libubox ambient capabilities (OpenWrt 21.02+).
+	procd_set_param capabilities "cap_net_admin cap_net_raw+eip"
+
+	# Bind address: append ":" so it reads as "<addr>:<port>" when joined.
+	procd_set_param env \
+		GS_PROXY_PORT="$http_port" \
+		GS_WEBADMIN_PORT="$admin_port" \
+		GS_BOUND_ADDRESS="${bind}:" \
+		GS_TRANSPARENT_PROXY_PORT="$tp_port" \
+		GS_TRANSPARENT_PROXY="$([ "$tp_enabled" = "1" ] && echo true || echo false)" \
+		GATESENTRY_DNS_ADDR="$dns_addr" \
+		GATESENTRY_DNS_RESOLVER="$dns_resolver" \
+		GS_DEBUG_LOGGING="$([ "$debug" = "1" ] && echo true || echo false)" \
+		GS_MAX_SCAN_SIZE_MB="$max_scan" \
+		TZ="$tz"
+
+	# Only inject the DNS port env var when the user actually wants the
+	# built-in DNS server running. The runtime setting `enable_dns_server`
+	# (seeded post-start below) is the gate that controls whether the DNS
+	# goroutine actually starts; if `dns_enabled=0` we omit the var entirely
+	# so the binary's port-53 bind attempt doesn't conflict with dnsmasq.
+	[ "$dns_enabled" = "1" ] && \
+		procd_append_param env GATESENTRY_DNS_PORT="$dns_port"
+
+	procd_close_instance
+
+	# First-install HTTP seed: write runtime settings that aren't env-driven
+	# (mdns_browser_enabled, enable_dns_server) via the web admin API. The
+	# binary's runtime.Reload() picks up the new values within seconds.
+	seed_runtime_settings "$admin_port" "$dns_enabled" "$mdns"
+}
+
+seed_runtime_settings() {
+	local admin_port="$1" dns_enabled="$2" mdns="$3"
+	local i tries=15
+	for i in $(seq 1 $tries); do
+		if curl -fsS -u admin:admin \
+			-H "Content-Type: application/json" \
+			-d "{\"name\":\"enable_dns_server\",\"value\":\"$([ "$dns_enabled" = "1" ] && echo true || echo false)\"}" \
+			"http://127.0.0.1:${admin_port}/api/settings/set" >/dev/null 2>&1; then
+			break
+		fi
+		sleep 1
+	done
+	for i in $(seq 1 $tries); do
+		if curl -fsS -u admin:admin \
+			-H "Content-Type: application/json" \
+			-d "{\"name\":\"mdns_browser_enabled\",\"value\":\"$([ "$mdns" = "1" ] && echo true || echo false)\"}" \
+			"http://127.0.0.1:${admin_port}/api/settings/set" >/dev/null 2>&1; then
+			break
+		fi
+		sleep 1
+	done
+}
+
+service_triggers() {
+	procd_add_reload_trigger gatesentry
+}
+
+reload_service() {
+	# The binary doesn't trap SIGHUP; UCI changes require a full restart.
+	stop
+	start
+}

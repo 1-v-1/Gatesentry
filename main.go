@@ -95,6 +95,20 @@ func preupgradeCheck(binpath string) error {
 }
 
 func main() {
+	// Apply UCI-provided environment overrides before anything else reads them.
+	// These three values were previously baked-in at package level (var GSPROXYPORT,
+	// var GSWEBADMINPORT, var GS_BOUND_ADDRESS) and are now configurable via
+	// /etc/config/gatesentry for OpenWrt deployments.
+	if v := os.Getenv("GS_PROXY_PORT"); v != "" {
+		GSPROXYPORT = v
+	}
+	if v := os.Getenv("GS_WEBADMIN_PORT"); v != "" {
+		GSWEBADMINPORT = v
+	}
+	if v := os.Getenv("GS_BOUND_ADDRESS"); v != "" {
+		GS_BOUND_ADDRESS = v
+	}
+
 	dir, err := filepath.Abs(filepath.Dir(os.Args[0]) + string(os.PathSeparator) + "gatesentry")
 	if err != nil {
 		log.Fatal(err)

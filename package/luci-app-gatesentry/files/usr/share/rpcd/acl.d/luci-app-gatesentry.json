@@ -1,0 +1,13 @@
+{
+	"luci-app-gatesentry": {
+		"description": "Grant access to GateSentry LuCI actions",
+		"read": {
+			"cgi-io": ["info", "exec"],
+			"luci.gatesentry": ["status"]
+		},
+		"write": {
+			"cgi-io": ["exec"],
+			"luci.gatesentry": ["service"]
+		}
+	}
+}
