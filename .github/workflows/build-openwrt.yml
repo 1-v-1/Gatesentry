@@ -142,6 +142,7 @@ jobs:
           path: .openwrt-out/*.ipk
           if-no-files-found: error
           retention-days: 14
+          include-hidden-files: true
 
       - name: Attach ipks to GitHub release
         if: github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success'
