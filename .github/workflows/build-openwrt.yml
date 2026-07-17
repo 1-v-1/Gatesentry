@@ -91,52 +91,63 @@ jobs:
       - name: Compile ipk packages
         run: |
           mkdir -p "${{ github.workspace }}/.openwrt-out"
+
+          # Write the SDK build script to a host file and bind-mount it
+          # into the container. Doing this avoids a GitHub-Actions-specific
+          # shell-escaping pitfall: when the script is passed inline as
+          # `bash -c '...'`, any single quotes inside the script close
+          # the outer single-quoted argument and break parsing in subtle
+          # ways that don't reproduce when the same script is run from a
+          # developer's local shell.
+          cat > .openwrt-build.sh <<'SDK_EOF'
+          set -e
+          set -x
+          cp -r /src/package/* /builder/package/
+          cd /builder
+
+          echo "=== feeds update ==="
+          ./scripts/feeds update -a
+          echo "=== feeds install ==="
+          ./scripts/feeds install -a -f
+
+          make defconfig
+
+          # Skip the Lua binding (defconfig defaults it to =m). The
+          # Makefile uses $(if X,ON,OFF) which treats any non-empty
+          # CONFIG_PACKAGE_liblucihttp-lua as ON, so we cannot simply
+          # set it to =n. Sed the cmake option directly instead.
+          sed -i "s/-DBUILD_LUA=\$(if/-DBUILD_LUA=OFF \$(if/" \
+            feeds/luci/contrib/package/lucihttp/Makefile
+
+          # Make luci-app-gatesentry itself selectable so its install
+          # step runs (its Makefile does not auto-select it).
+          echo "CONFIG_PACKAGE_luci-app-gatesentry=m" >> .config
+
+          echo "=== compile gatesentry ==="
+          make package/gatesentry/compile V=s 2>&1 | tail -40
+
+          echo "=== compile luci-app-gatesentry ==="
+          make package/luci-app-gatesentry/compile \
+            IGNORE_ERRORS=y V=s 2>&1 | tail -40
+
+          echo "=== produced ipks ==="
+          # Only stage our own packages. bin/packages/ also contains
+          # every transitive dependency ipk built by the SDK (cgi-io,
+          # libubox, libuci, libubus, libiwinfo, libjson-c, lua,
+          # libucode, liblucihttp, ...); uploading those to the release
+          # bloats it with ~200 files we don't ship.
+          find bin/packages -name "gatesentry_*.ipk" -exec cp -v {} /out/ \;
+          find bin/packages -name "luci-app-gatesentry_*.ipk" -exec cp -v {} /out/ \;
+          ls -la /out/
+          SDK_EOF
+
           docker run --rm --user root \
             -v "${{ github.workspace }}/package":/src/package:ro \
             -v "${{ github.workspace }}/.openwrt-out":/out \
             -v "${{ github.workspace }}/.openwrt-cache":/in:ro \
+            -v "${{ github.workspace }}/.openwrt-build.sh":/build.sh:ro \
             openwrt/sdk:${{ matrix.sdk_tag }} \
-            bash -c '
-              set -e
-              set -x
-              cp -r /src/package/* /builder/package/
-              cd /builder
-
-              echo "=== feeds update ==="
-              ./scripts/feeds update -a
-              echo "=== feeds install ==="
-              ./scripts/feeds install -a -f
-
-              make defconfig
-
-              # Skip the Lua binding (defconfig defaults it to =m). The
-              # Makefile uses $(if X,ON,OFF) which treats any non-empty
-              # CONFIG_PACKAGE_liblucihttp-lua as ON, so we cannot simply
-              # set it to =n. Sed the cmake option directly instead.
-              sed -i "s/-DBUILD_LUA=\$(if/-DBUILD_LUA=OFF \$(if/" \
-                feeds/luci/contrib/package/lucihttp/Makefile
-
-              # Make luci-app-gatesentry itself selectable so its install
-              # step runs (its Makefile does not auto-select it).
-              echo "CONFIG_PACKAGE_luci-app-gatesentry=m" >> .config
-
-              echo "=== compile gatesentry ==="
-              make package/gatesentry/compile V=s 2>&1 | tail -40
-
-              echo "=== compile luci-app-gatesentry ==="
-              make package/luci-app-gatesentry/compile \
-                IGNORE_ERRORS=y V=s 2>&1 | tail -40
-
-              echo "=== produced ipks ==="
-              # Only stage our own packages. bin/packages/ also contains
-              # every transitive dependency ipk built by the SDK (cgi-io,
-              # libubox, libuci, libubus, libiwinfo, libjson-c, lua,
-              # libucode, liblucihttp, ...); uploading those to the release
-              # bloats it with ~200 files we don't ship.
-              find bin/packages -name "gatesentry_*.ipk" -exec cp -v {} /out/ \;
-              find bin/packages -name "luci-app-gatesentry_*.ipk" -exec cp -v {} /out/ \;
-              ls -la /out/
-            '
+            bash /build.sh
 
       # Docker writes files as root (so we can write /builder/package/),
       # but the runner's user can't read root-owned files on the host.
