@@ -128,8 +128,15 @@ jobs:
                 IGNORE_ERRORS=y V=s 2>&1 | tail -40
 
               echo "=== produced ipks ==="
-              find bin/packages -name "*.ipk" -print
-              find bin/packages -name "*.ipk" -exec cp -v {} /out/ \;
+              # Only stage our own packages. bin/packages/ also contains
+              # every transitive dependency ipk built by the SDK (cgi-io,
+              # libubox, libuci, libubus, libiwinfo, libjson-c, lua,
+              # libucode, liblucihttp, ...); uploading those to the release
+              # bloats it with ~200 files we don't ship.
+              find bin/packages \
+                \( -name "gatesentry_*.ipk" \
+                -o -name "luci-app-gatesentry_*.ipk" \) \
+                -print -exec cp -v {} /out/ \;
               ls -la /out/
             '
 
