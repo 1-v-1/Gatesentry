@@ -129,6 +129,12 @@ jobs:
               ls -la /out/
             '
 
+      # Docker writes files as root (so we can write /builder/package/),
+      # but the runner's user can't read root-owned files on the host.
+      # Chmod the ipks so actions/upload-artifact can pick them up.
+      - name: Fix artifact permissions
+        run: sudo chmod -R a+rX "${{ github.workspace }}/.openwrt-out"
+
       - name: Upload ipks as workflow artifacts
         uses: actions/upload-artifact@v4
         with:
