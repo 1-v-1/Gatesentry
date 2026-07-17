@@ -13,7 +13,11 @@ on:
         default: "x86_64"
 
 permissions:
-  contents: read
+  # contents: write is required so the workflow can attach the produced
+  # ipks back to the release that the upstream "Build a release" workflow
+  # created. With contents: read (the default for workflow_run triggers),
+  # `gh release upload` returns HTTP 403.
+  contents: write
 
 jobs:
   build:
