@@ -34,8 +34,12 @@ jobs:
           cd ui && npm install && npm run build && cd ..
           ls
           rm -rf application/webserver/frontend/files/*
+          # Vite is configured to emit all JS/CSS into dist/fs/ (see
+          # ui/vite.config.ts: assetsDir: "fs", entryFileNames: "fs/bundle.js").
+          # That mirrors the path the webserver handler serves from:
+          # /fs/style2.css → files/fs/style2.css in the //go:embed FS.
+          # Don't flatten — leave fs/ as a directory.
           mv ui/dist/* application/webserver/frontend/files
-          mv application/webserver/frontend/files/fs/* application/webserver/frontend/files
           # Primary targets (existing users)
           env CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o gatesentry-linux
           env GOOS=darwin GOARCH=amd64 go build -o gatesentry-macos
