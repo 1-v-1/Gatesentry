@@ -78,6 +78,10 @@ type GSRuntime struct {
 	DNSServerChannel            chan int
 	BoundAddress                *string
 	DnsServerInfo               *GatesentryTypes.DnsServerInfo
+	// BlockPageHTML is the in-memory cache of the admin-supplied custom block
+	// page. Read on every proxy block event, so caching avoids re-parsing
+	// GSSettings JSON on the hot path. Refresh via ReloadBlockPage().
+	BlockPageHTML               string
 }
 
 func SetBaseDir(a string) {
@@ -349,6 +353,10 @@ llHxr1oRgfKfh/NFn7AGoS8sGIRVE80P
 	//
 	R.GSUserRunDataSaver()
 
+	// Prime the in-memory block page cache from GSSettings so the proxy
+	// hot path doesn't re-parse the settings JSON on every block event.
+	R.ReloadBlockPage()
+
 	//R.KeepAliveMonitor()
 
 	/**
@@ -388,6 +396,16 @@ func (R *GSRuntime) ReloadCertificate() {
 	keypembytes := []byte(R.GSSettings.Get("keypem"))
 
 	gatesentryproxy.InitWithDataCerts(capembytes, keypembytes)
+}
+
+// ReloadBlockPage refreshes the in-memory BlockPageHTML cache from GSSettings.
+// Called once during Init() and again by the settings POST handler when the
+// admin updates the custom HTML — so changes propagate without a restart.
+func (R *GSRuntime) ReloadBlockPage() {
+	if R.GSSettings == nil {
+		return
+	}
+	R.BlockPageHTML = R.GSSettings.Get("block_page_html")
 }
 
 func (R *GSRuntime) GetTotalConsumptionData() (string, string) {

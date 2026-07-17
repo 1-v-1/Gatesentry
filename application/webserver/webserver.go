@@ -314,6 +314,11 @@ func RegisterEndpointsStartServer(
 		}
 		output := gatesentryWebserverEndpoints.GSApiSettingsPOST(requestedId, internalSettings, temp)
 		runtime.Reload()
+		// Refresh the in-memory block page cache so the proxy picks up the
+		// new HTML on the very next block event (no restart required).
+		if requestedId == "block_page_html" {
+			runtime.ReloadBlockPage()
+		}
 		SendJSON(w, output)
 	})
 

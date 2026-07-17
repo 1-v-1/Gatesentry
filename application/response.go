@@ -17,7 +17,7 @@ func Handle_Html_Response(s string) string {
 	responder := &gatesentry2responder.GSFilterResponder{Blocked: false}
 	runfilterHandlers(s, "text/html", responder)
 	if responder.Blocked {
-		return gatesentry2responder.BuildResponsePage(responder.Reasons, responder.Score)
+		return gatesentry2responder.BuildResponsePage(responder.Reasons, responder.Score, R.BlockPageHTML)
 	}
 	// fmt.Println( s );
 	// fmt.Println( len(R.FileContents["stopwords"]) )

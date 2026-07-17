@@ -54,6 +54,7 @@ func GSwebserverStart(port int) {
 		GetTotalConsumptionData: R.GetTotalConsumptionData,
 		GetApplicationVersion:   R.GetApplicationVersion,
 		Reload:                  R.Init,
+		ReloadBlockPage:         R.ReloadBlockPage,
 	}
 	runtime := gatesentryWebserverTypes.NewTemporaryRuntime(runtimeArgs)
 

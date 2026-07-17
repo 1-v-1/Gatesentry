@@ -1,6 +1,7 @@
 package gatesentry2responder
 
 import (
+	"html"
 	"strconv"
 	"strings"
 )
@@ -46,7 +47,10 @@ func GetBlockImage() string {
 	return image
 }
 
-func BuildGeneralResponsePage(Reasons []string, Score int) string {
+func BuildGeneralResponsePage(Reasons []string, Score int, customHTML string) string {
+	if customHTML != "" {
+		return customHTML
+	}
 	content := "<p ><h4 style='text-align:center'>GateSentry Web Filter</h4></p>"
 	content += "<p style='text-align:center'><img src='" + GetBlockImage() + "'></p>"
 	KeywordsFound := "<h5 style='text-align:center'>"
@@ -64,7 +68,10 @@ func BuildGeneralResponsePage(Reasons []string, Score int) string {
 	return templ
 }
 
-func BuildResponsePage(Reasons []string, Score int) string {
+func BuildResponsePage(Reasons []string, Score int, customHTML string) string {
+	if customHTML != "" {
+		return injectKeywordBlock(customHTML, Reasons, Score)
+	}
 	// KeywordsFound := "";
 	// for i := 0; i < len(Reasons); i++ {
 	// 	KeywordsFound += "<li><b>"+Reasons[i]+"</b></li>"
@@ -129,4 +136,51 @@ func BuildResponsePage(Reasons []string, Score int) string {
 	// 			</script>
 
 	// 		</html>`
+}
+
+// keywordBlockHTML builds the auto-injected block of HTML describing the
+// matched keywords and the page score. All dynamic values are HTML-escaped
+// because Reasons[i] may originate from URL/page content that the admin
+// does not fully control.
+func keywordBlockHTML(reasons []string, score int) string {
+	var b strings.Builder
+	b.WriteString(`<div id="gs-keyword-extra">`)
+	b.WriteString(`<p>The page you requested has been blocked because it generated a score of <u>`)
+	b.WriteString(html.EscapeString(strconv.Itoa(score)))
+	b.WriteString(`</u> which is above the viewing limits on this network.</p>`)
+	b.WriteString(`<p>Reason(s) this page was blocked was presence of the following:</p><ul>`)
+	for _, r := range reasons {
+		b.WriteString(`<li><strong>`)
+		b.WriteString(html.EscapeString(r))
+		b.WriteString(`</strong></li>`)
+	}
+	b.WriteString(`</ul></div>`)
+	return b.String()
+}
+
+// injectKeywordBlock merges the auto-generated score + matched-keywords block
+// into the admin-supplied custom HTML.
+//
+// Search order:
+//  1. `<!--GS_REASONS-->` sentinel (exact, single replacement) — admin opt-in.
+//  2. Last occurrence of `</body>` (case-insensitive) — avoid the
+//     script-string false positive by picking the last one.
+//  3. Last occurrence of `</html>` (case-insensitive).
+//  4. Fallback: append at the end.
+func injectKeywordBlock(htmlStr string, reasons []string, score int) string {
+	const sentinel = "<!--GS_REASONS-->"
+	block := keywordBlockHTML(reasons, score)
+
+	if strings.Contains(htmlStr, sentinel) {
+		return strings.Replace(htmlStr, sentinel, block, 1)
+	}
+
+	lower := strings.ToLower(htmlStr)
+	if idx := strings.LastIndex(lower, "</body>"); idx >= 0 {
+		return htmlStr[:idx] + block + htmlStr[idx:]
+	}
+	if idx := strings.LastIndex(lower, "</html>"); idx >= 0 {
+		return htmlStr[:idx] + block + htmlStr[idx:]
+	}
+	return htmlStr + block
 }

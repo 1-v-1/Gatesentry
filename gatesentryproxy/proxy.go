@@ -572,6 +572,9 @@ func sendInsecureBlockBytes(w http.ResponseWriter, r *http.Request, resp *http.R
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	// CSP allows inline scripts/styles (admin's custom HTML may use them) and
+	// data-URI images (the default block icon), but blocks external sources.
+	w.Header().Set("Content-Security-Policy", "default-src 'self' 'unsafe-inline' data:; img-src 'self' data:;")
 	w.Write(content)
 }
 
@@ -607,6 +610,14 @@ func sendBlockMessageBytes(w http.ResponseWriter, r *http.Request, resp *http.Re
 		_, err = tlsConn.Write([]byte("HTTP/1.1 403 Forbidden\r\n"))
 		if err != nil {
 			log.Println("[Proxy][Error:showBlockPage] writing to connection", err)
+			return
+		}
+		// CSP allows inline scripts/styles (admin's custom HTML may use them) and
+		// data-URI images (the default block icon), but blocks external sources.
+		_, err = tlsConn.Write([]byte("Content-Security-Policy: default-src 'self' 'unsafe-inline' data:; img-src 'self' data:\r\n"))
+		if err != nil {
+			log.Println("[Proxy][Error:showBlockPage] Error writing to connection", err)
+			conn.Close()
 			return
 		}
 		_, err = tlsConn.Write([]byte("Content-Type: text/html\r\n\r\n"))

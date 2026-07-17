@@ -270,7 +270,7 @@ func RunGateSentry() {
 			responder := &gresponder.GSFilterResponder{Blocked: false}
 			application.RunFilter("text/html", string(gafd.Content), responder)
 			if responder.Blocked {
-				gafd.FilterResponse = []byte(gresponder.BuildResponsePage(responder.Reasons, responder.Score))
+				gafd.FilterResponse = []byte(gresponder.BuildResponsePage(responder.Reasons, responder.Score, R.BlockPageHTML))
 				gafd.FilterResponseAction = gatesentryproxy.ProxyActionBlockedTextContent
 			}
 		} else {
@@ -315,7 +315,7 @@ func RunGateSentry() {
 				gafd.FilterResponse = transparentImageBytes
 			} else {
 				gafd.FilterResponseAction = gatesentryproxy.ProxyActionBlockedFileType
-				gafd.FilterResponse = []byte(gresponder.BuildGeneralResponsePage([]string{message}, -1))
+				gafd.FilterResponse = []byte(gresponder.BuildGeneralResponsePage([]string{message}, -1, R.BlockPageHTML))
 			}
 		}
 	}
@@ -327,7 +327,7 @@ func RunGateSentry() {
 		filters.RunTimeFilter(responder, blockedtimes, timezone)
 		// user := gpt.User
 		if responder.Blocked {
-			gafd.FilterResponse = []byte(gresponder.BuildGeneralResponsePage([]string{"Internet access on this network has been disabled because the current time has been specified as a blocked time period in GateSentry's settings."}, -1))
+			gafd.FilterResponse = []byte(gresponder.BuildGeneralResponsePage([]string{"Internet access on this network has been disabled because the current time has been specified as a blocked time period in GateSentry's settings."}, -1, R.BlockPageHTML))
 		}
 	}
 
@@ -346,7 +346,7 @@ func RunGateSentry() {
 				gafd.FilterResponseAction = gatesentryproxy.ProxyActionUserActive
 			} else {
 				gafd.FilterResponseAction = gatesentryproxy.ProxyActionBlockedInternetForUser
-				gafd.FilterResponse = []byte(gresponder.BuildGeneralResponsePage([]string{"Your access has been disabled by the administrator of this network."}, -1))
+				gafd.FilterResponse = []byte(gresponder.BuildGeneralResponsePage([]string{"Your access has been disabled by the administrator of this network."}, -1, R.BlockPageHTML))
 			}
 		} else {
 			gafd.FilterResponseAction = gatesentryproxy.ProxyActionUserNotFound
@@ -365,7 +365,7 @@ func RunGateSentry() {
 		application.RunFilter("url/all_blocked_urls", host, responder)
 		if responder.Blocked {
 			gafd.FilterResponseAction = gatesentryproxy.ProxyActionBlockedUrl
-			gafd.FilterResponse = []byte(gresponder.BuildGeneralResponsePage([]string{"Unable to fulfill your request because it contains a <strong>blocked URL</strong>."}, -1))
+			gafd.FilterResponse = []byte(gresponder.BuildGeneralResponsePage([]string{"Unable to fulfill your request because it contains a <strong>blocked URL</strong>."}, -1, R.BlockPageHTML))
 		}
 	}
 
@@ -395,7 +395,7 @@ func RunGateSentry() {
 		default:
 			break
 		}
-		*&gafd.FilterResponse = []byte(gresponder.BuildGeneralResponsePage([]string{msg}, -1))
+		*&gafd.FilterResponse = []byte(gresponder.BuildGeneralResponsePage([]string{msg}, -1, R.BlockPageHTML))
 	}
 
 	// Making a comm channel for our internal dns server

@@ -11,6 +11,17 @@ import (
 	"github.com/badoux/checkmail"
 )
 
+// MaxBlockPageHTMLBytes caps the admin-supplied custom block page size to
+// keep the per-request block page bounded. 256 KB is enough for a richly
+// designed page with inline styles, but well under any DoS concern.
+const MaxBlockPageHTMLBytes = 256 * 1024
+
+// blockPageHTMLErrorValue is returned in the Datareceiver value field when
+// the admin's HTML exceeds the size cap. The UI watches for this marker
+// string to surface an inline error instead of treating the response as a
+// successful save.
+const blockPageHTMLErrorValue = "ERROR_BLOCK_PAGE_HTML_TOO_LARGE"
+
 func GSApiSettingsGET(requestedId string, settings *gatesentry2storage.MapStore) interface{} {
 	switch requestedId {
 	case "general_settings":
@@ -25,7 +36,7 @@ func GSApiSettingsGET(requestedId string, settings *gatesentry2storage.MapStore)
 			value = string(valueJson)
 		}
 		return struct{ Value string }{Value: value}
-	case "blocktimes", "strictness", "timezone", "idemail", "enable_https_filtering", "capem", "keypem", "enable_dns_server", "dns_custom_entries", "ai_scanner_url", "enable_ai_image_filtering", "EnableUsers", "dns_resolver":
+	case "blocktimes", "strictness", "timezone", "idemail", "enable_https_filtering", "capem", "keypem", "enable_dns_server", "dns_custom_entries", "ai_scanner_url", "enable_ai_image_filtering", "EnableUsers", "dns_resolver", "block_page_html":
 		value := settings.Get(requestedId)
 		return struct {
 			Key   string
@@ -92,6 +103,16 @@ func GSApiSettingsPOST(requestedId string, settings *gatesentry2storage.MapStore
 		if requestedId == "dns_resolver" {
 			gatesentryDnsServer.SetExternalResolver(temp.Value)
 		}
+	}
+
+	if requestedId == "block_page_html" {
+		if len(temp.Value) > MaxBlockPageHTMLBytes {
+			// Echo back the sentinel so the UI can show an inline error.
+			temp.Value = blockPageHTMLErrorValue
+			return temp
+		}
+		settings.Update(requestedId, temp.Value)
+		// Caller (webserver.go) refreshes the in-memory R.BlockPageHTML cache.
 	}
 
 	// fmt.Println( temp );
