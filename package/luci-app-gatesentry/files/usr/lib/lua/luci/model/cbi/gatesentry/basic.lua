@@ -1,8 +1,6 @@
 m = Map("gatesentry", translate("GateSentry"),
 	translate("GateSentry runtime parameters. Filter rules, users, blocklists and HTTPS interception remain in the web admin on port 10786 of the running service."))
 
-m:chain("luci")
-
 -- ── Security banner ─────────────────────────────────────────────────────────
 banner = m:section(SimpleSection, nil, translatef(
 	"<strong>%s</strong> &mdash; %s",
@@ -11,7 +9,7 @@ banner = m:section(SimpleSection, nil, translatef(
 ))
 
 -- ── Service section ─────────────────────────────────────────────────────────
-s = m:section(TypedSection, "main", translate("Service"))
+s = m:section(TypedSection, "gatesentry", translate("Service"))
 s.anonymous = true
 s.addremove = false
 
@@ -44,7 +42,7 @@ ba.default  = "0.0.0.0"
 ba:depends("enabled", "1")
 
 -- ── DNS server section ───────────────────────────────────────────────────────
-s2 = m:section(TypedSection, "main", translate("Built-in DNS server"))
+s2 = m:section(TypedSection, "gatesentry", translate("Built-in DNS server"))
 s2.anonymous = true
 s2.addremove = false
 
@@ -68,7 +66,7 @@ dr.default  = "1.1.1.1:53"
 dr:depends("dns_enabled", "1")
 
 -- ── Advanced section ─────────────────────────────────────────────────────────
-s3 = m:section(TypedSection, "main", translate("Advanced"))
+s3 = m:section(TypedSection, "gatesentry", translate("Advanced"))
 s3.anonymous = true
 s3.addremove = false
 
