@@ -98,15 +98,19 @@ alo = s3:option(Flag, "admin_lan_only", translate("Restrict admin port to LAN (f
 alo.default = alo.enabled
 
 -- ── Validation ──────────────────────────────────────────────────────────────
-function m.on_commit(self)
-	local hp = http_port and http_port:formvalue(nil) or "10413"
-	local ap = admin_port and admin_port:formvalue(nil) or "10786"
+function m.on_commit(map)
+	-- on_commit is invoked with only (map); pass the full cbid string to
+	-- Map:formvalue. AbstractValue:formvalue(section) builds the cbid from
+	-- the section name but dies when section is nil, and passing it the
+	-- section name "main" hard-codes the assumption that TypedSection has
+	-- a single named instance.
+	local hp = map:formvalue("cbid.gatesentry.main.http_port") or "10413"
+	local ap = map:formvalue("cbid.gatesentry.main.admin_port") or "10786"
 	if hp == ap then
-		m.message = translate("HTTP proxy port and admin port must differ")
-		m.error   = "ports_clash"
-		return false
+		map.proceed = false
+		map.error   = "ports_clash"
+		map.message = translate("HTTP proxy port and admin port must differ")
 	end
-	return true
 end
 
 return m
