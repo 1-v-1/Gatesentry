@@ -49,7 +49,11 @@ define Package/gatesentry
 	TITLE:=GateSentry filtering proxy
 	URL:=https://github.com/fifthsegment/Gatesentry
 	DEPENDS:=+libc +libpthread
-	USERID:=gatesentry=453:gatesentry=453
+	# No USERID: requesting a system-assigned uid via USERID is brittle
+	# on iStoreOS / other forks where the default-assigned id collides
+	# with dnsmasq (uid 453). Let the postinst create the user lazily
+	# via `useradd` only if it isn't already present, and tolerate that
+	# step failing (the daemon then runs as root).
 endef
 
 define Package/gatesentry/description
@@ -70,13 +74,33 @@ define Package/gatesentry/install
 
 	$(INSTALL_DIR) $(1)/etc/config
 	$(INSTALL_DATA) ./files/gatesentry.config $(1)/etc/config/gatesentry
+
+	# The daemon's run.sh does `cd /var/lib/gatesentry && exec
+	# ./gatesentry-bin` so the binary's argv[0] resolves to a path whose
+	# dirname is the writable /var/lib/gatesentry -- that keeps the
+	# Go-side data dir off the read-only /usr/lib. Stage the binary
+	# there as a symlink to /usr/lib/gatesentry/gatesentry-bin (execve
+	# preserves argv[0], so the symlink target doesn't matter for the
+	# basedir trick -- only the caller's "./gatesentry-bin" string does).
+	$(INSTALL_DIR) $(1)/var/lib/gatesentry
+	ln -sf /usr/lib/gatesentry/gatesentry-bin $(1)/var/lib/gatesentry/gatesentry-bin
 endef
 
 define Package/gatesentry/postinst
 #!/bin/sh
 [ -n "$$IPKG_INSTROOT" ] || {
 	mkdir -p /var/lib/gatesentry/gatesentry/filterfiles
-	chown -R gatesentry:gatesentry /var/lib/gatesentry
+	# Lazily provision the runtime user/group. We don't use USERID in
+	# the package metadata because OpenWrt forks (eStoreOS, etc.) may
+	# already assign our preferred uid to dnsmasq; `useradd` picks the
+	# first free uid past the configured base, which is what we want.
+	if ! id gatesentry >/dev/null 2>&1; then
+		useradd -r -d /var/lib/gatesentry -s /sbin/nologin \
+			-U gatesentry 2>/dev/null || true
+	fi
+	if id gatesentry >/dev/null 2>&1; then
+		chown -R gatesentry:gatesentry /var/lib/gatesentry
+	fi
 
 	uci -q batch <<-EOF || true
 		delete firewall.gs_admin
