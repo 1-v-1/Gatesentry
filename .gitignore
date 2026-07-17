@@ -22,3 +22,11 @@ __pycache__/
 *.pyc
 *.pyo
 .pytest_cache/
+
+# OS / IDE noise
+.DS_Store
+Thumbs.db
+
+# OpenWrt build artifacts (generated locally by the ipk build flow)
+.openwrt-cache/
+.openwrt-out/
