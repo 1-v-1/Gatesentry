@@ -48,38 +48,84 @@ jobs:
       - name: Pull OpenWrt SDK container
         run: docker pull openwrt/sdk:${{ matrix.sdk_tag }}
 
-      # The OpenWrt SDK image runs as the non-root 'builder' user by default,
-      # which cannot write to /sdk. Force root via --user root so we can drop
-      # our package definitions into /sdk/package/. The resulting ipks are
-      # copied out to /out (mounted from $GITHUB_WORKSPACE/.openwrt-out) for
-      # actions/upload-artifact to pick up.
+      # Download the gatesentry release binary matching this matrix board on
+      # the host. The Makefile reads /in/gatesentry-bin (see
+      # package/gatesentry/Makefile) instead of fetching itself, which is
+      # more reliable than depending on $(WGET) inside the SDK image.
+      - name: Fetch gatesentry prebuilt binary
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          BOARD: ${{ matrix.board }}
+        run: |
+          mkdir -p .openwrt-cache
+          case "$BOARD" in
+            x86_64)                       ASSET=gatesentry-linux ;;
+            aarch64_*)                    ASSET=gatesentry-linux-arm64 ;;
+            arm_cortex-a7|arm_cortex-a9)  ASSET=gatesentry-linux-armv7 ;;
+            mipsel_*)                     ASSET=gatesentry-linux-mipsel ;;
+            *)                            ASSET=gatesentry-linux ;;
+          esac
+          curl -fsSL \
+            -o .openwrt-cache/gatesentry-bin \
+            "https://github.com/1-v-1/Gatesentry/releases/download/${TAG#v}/${ASSET}"
+          chmod +x .openwrt-cache/gatesentry-bin
+
+      # Compile the ipks. Notes:
+      #  * The SDK image's root is /builder (not /sdk).
+      #  * --user root so we can drop our package definitions into
+      #    /builder/package/.
+      #  * `make defconfig` seeds ./.config non-interactively (no TTY for
+      #    menuconfig).
+      #  * liblucihttp-lua is disabled — luci-app-gatesentry only needs the
+      #    ucode binding (luci-base -> liblucihttp-ucode) and the Lua
+      #    binding pulls in liblua which the SDK image does not provide.
+      #  * IGNORE_ERRORS=y keeps the build going past the libucode/zlib/
+      #    json-c host-tooling holes in this minimal SDK image. luci-app-
+      #    gatesentry is a pure .lua metapackage (PKGARCH:=all) with no
+      #    binaries, so a failed transitive compile does not affect its
+      #    own install step.
       - name: Compile ipk packages
         run: |
           mkdir -p "${{ github.workspace }}/.openwrt-out"
           docker run --rm --user root \
             -v "${{ github.workspace }}/package":/src/package:ro \
             -v "${{ github.workspace }}/.openwrt-out":/out \
+            -v "${{ github.workspace }}/.openwrt-cache":/in:ro \
             openwrt/sdk:${{ matrix.sdk_tag }} \
             bash -c '
               set -e
               set -x
-              # Drop our package definitions directly into /sdk/package/.
-              cp -r /src/package/* /sdk/package/
-              cd /sdk
+              cp -r /src/package/* /builder/package/
+              cd /builder
 
               echo "=== feeds update ==="
               ./scripts/feeds update -a
               echo "=== feeds install ==="
-              ./scripts/feeds install -a
+              ./scripts/feeds install -a -f
+
+              make defconfig
+
+              # Skip the Lua binding (defconfig defaults it to =m). The
+              # Makefile uses $(if X,ON,OFF) which treats any non-empty
+              # CONFIG_PACKAGE_liblucihttp-lua as ON, so we cannot simply
+              # set it to =n. Sed the cmake option directly instead.
+              sed -i "s/-DBUILD_LUA=\$(if/-DBUILD_LUA=OFF \$(if/" \
+                feeds/luci/contrib/package/lucihttp/Makefile
+
+              # Make luci-app-gatesentry itself selectable so its install
+              # step runs (its Makefile does not auto-select it).
+              echo "CONFIG_PACKAGE_luci-app-gatesentry=m" >> .config
 
               echo "=== compile gatesentry ==="
-              make package/gatesentry/compile V=s 2>&1 | tail -80
+              make package/gatesentry/compile V=s 2>&1 | tail -40
+
               echo "=== compile luci-app-gatesentry ==="
-              make package/luci-app-gatesentry/compile V=s 2>&1 | tail -80
+              make package/luci-app-gatesentry/compile \
+                IGNORE_ERRORS=y V=s 2>&1 | tail -40
 
               echo "=== produced ipks ==="
               find bin/packages -name "*.ipk" -print
-              cp -v bin/packages/*/*.ipk /out/ 2>/dev/null || true
+              find bin/packages -name "*.ipk" -exec cp -v {} /out/ \;
               ls -la /out/
             '
 

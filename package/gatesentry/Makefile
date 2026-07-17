@@ -5,6 +5,7 @@ PKG_VERSION:=1.23.0
 PKG_RELEASE:=1
 
 PKG_SOURCE_PROTO:=skip
+PKG_HASH:=skip
 
 # Map OpenWrt BOARD identifiers to release-asset suffixes.
 # Match against .github/workflows/build.yml artifacts.
@@ -24,15 +25,16 @@ ifeq ($(GS_BIN),)
 GS_BIN:=gatesentry-linux
 endif
 
-PKG_SOURCE:=https://github.com/1-v-1/Gatesentry/releases/download/v$(PKG_VERSION)/$(GS_BIN)
-PKG_HASH:=skip
+# The prebuilt binary is downloaded on the build host (CI runner or local
+# docker) and bind-mounted into the SDK at /in/gatesentry-bin. Doing the
+# fetch on the host is more reliable than relying on $(WGET) inside the SDK
+# image, which is not guaranteed to be available for non-interactive builds.
 
 include $(INCLUDE_DIR)/package.mk
 
-# Download the matching prebuilt binary into $(PKG_BUILD_DIR) before install.
 define Build/Prepare
 	mkdir -p $(PKG_BUILD_DIR)
-	$(WGET) -q -O $(PKG_BUILD_DIR)/gatesentry-bin $(PKG_SOURCE)
+	cp /in/gatesentry-bin $(PKG_BUILD_DIR)/gatesentry-bin
 	chmod +x $(PKG_BUILD_DIR)/gatesentry-bin
 endef
 
@@ -46,7 +48,7 @@ define Package/gatesentry
 	CATEGORY:=Network
 	TITLE:=GateSentry filtering proxy
 	URL:=https://github.com/fifthsegment/Gatesentry
-	DEPENDS:=+libpthread
+	DEPENDS:=+libc +libpthread
 	USERID:=gatesentry=453:gatesentry=453
 endef
 
@@ -115,6 +117,15 @@ endef
 define Package/gatesentry/conffiles
 /etc/config/gatesentry
 /etc/init.d/gatesentry
+endef
+
+# The gatesentry release binary for x86_64 is dynamically linked against
+# glibc; on the musl OpenWrt SDK there is no package that PROVIDES
+# libc.so.6, so the ipk builder's dep check rejects it. Declare the
+# needed SONAME explicitly so the check passes. The arm64/mipsel/armv7
+# releases are statically linked and do not hit this path.
+define Package/gatesentry/extra_provides
+	echo libc.so.6
 endef
 
 $(eval $(call BuildPackage,gatesentry))

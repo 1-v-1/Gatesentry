@@ -13,6 +13,14 @@ LUCI_PKGARCH:=all
 
 include $(INCLUDE_DIR)/package.mk
 
+# No binaries; the package is a pure .lua file drop-in for LuCI.
+# Without an explicit no-op Build/Compile, OpenWrt falls back to running
+# ./configure on the package directory, which fails because there is no
+# autotools setup.
+define Build/Compile
+	:
+endef
+
 define Package/luci-app-gatesentry
 	SECTION:=luci
 	CATEGORY:=LuCI
