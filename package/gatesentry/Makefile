@@ -70,13 +70,33 @@ define Package/gatesentry/install
 
 	$(INSTALL_DIR) $(1)/etc/config
 	$(INSTALL_DATA) ./files/gatesentry.config $(1)/etc/config/gatesentry
+
+	# run.sh does `cd /var/lib/gatesentry && exec ./gatesentry-bin`. The
+	# Go binary derives its data dir from filepath.Dir(os.Args[0]) so we
+	# need argv[0]'s dirname to be the writable /var/lib/gatesentry — not
+	# the read-only /usr/lib/gatesentry. Stage a symlink there pointing
+	# at the real binary; execve preserves argv[0] verbatim so the target
+	# doesn't matter, only the literal "./gatesentry-bin" we pass.
+	$(INSTALL_DIR) $(1)/var/lib/gatesentry
+	ln -sf /usr/lib/gatesentry/gatesentry-bin $(1)/var/lib/gatesentry/gatesentry-bin
 endef
 
 define Package/gatesentry/postinst
 #!/bin/sh
 [ -n "$$IPKG_INSTROOT" ] || {
 	mkdir -p /var/lib/gatesentry/gatesentry/filterfiles
-	chown -R gatesentry:gatesentry /var/lib/gatesentry
+
+	# Lazily create the runtime user/group. We can't rely on USERID in
+	# the package metadata because OpenWrt forks (iStoreOS, etc.) often
+	# collide with dnsmasq on uid 453 — opkg skips user creation in that
+	# case, which leaves /var/lib/gatesentry owned by the wrong account.
+	if ! id gatesentry >/dev/null 2>&1; then
+		useradd -r -d /var/lib/gatesentry -s /sbin/nologin \
+			-U gatesentry 2>/dev/null || true
+	fi
+	if id gatesentry >/dev/null 2>&1; then
+		chown -R gatesentry:gatesentry /var/lib/gatesentry
+	fi
 
 	uci -q batch <<-EOF || true
 		delete firewall.gs_admin
