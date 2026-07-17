@@ -67,7 +67,7 @@ jobs:
           esac
           curl -fsSL \
             -o .openwrt-cache/gatesentry-bin \
-            "https://github.com/1-v-1/Gatesentry/releases/download/${TAG#v}/${ASSET}"
+            "https://github.com/1-v-1/Gatesentry/releases/download/${TAG}/${ASSET}"
           chmod +x .openwrt-cache/gatesentry-bin
 
       # Compile the ipks. Notes:
