@@ -133,10 +133,8 @@ jobs:
               # libubox, libuci, libubus, libiwinfo, libjson-c, lua,
               # libucode, liblucihttp, ...); uploading those to the release
               # bloats it with ~200 files we don't ship.
-              find bin/packages \
-                \( -name "gatesentry_*.ipk" \
-                -o -name "luci-app-gatesentry_*.ipk" \) \
-                -print -exec cp -v {} /out/ \;
+              find bin/packages -name 'gatesentry_*.ipk' -exec cp -v {} /out/ \;
+              find bin/packages -name 'luci-app-gatesentry_*.ipk' -exec cp -v {} /out/ \;
               ls -la /out/
             '
 
