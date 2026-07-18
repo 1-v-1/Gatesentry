@@ -1,10 +1,14 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"flag"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -12,16 +16,15 @@ import (
 	"strings"
 	"time"
 
-	"errors"
-	"fmt"
-
 	application "bitbucket.org/abdullah_irfan/gatesentryf"
+	gatesentryDnsServer "bitbucket.org/abdullah_irfan/gatesentryf/dns/server"
 	gatesentryDnsFilter "bitbucket.org/abdullah_irfan/gatesentryf/dns/filter"
 	filters "bitbucket.org/abdullah_irfan/gatesentryf/filters"
 	gresponder "bitbucket.org/abdullah_irfan/gatesentryf/responder"
 	gatesentryWebserverEndpoints "bitbucket.org/abdullah_irfan/gatesentryf/webserver/endpoints"
 	"bitbucket.org/abdullah_irfan/gatesentryproxy"
 	"github.com/jpillora/overseer"
+	"golang.org/x/net/proxy"
 	"github.com/kardianos/service"
 	"github.com/steakknife/devnull"
 )
@@ -159,13 +162,40 @@ func main() {
 		_ = updaterInterval
 		_ = url
 		RunGateSentryServiceRunner("")
-
 	}
-
 }
 
 func prog(state overseer.State) {
 	RunGateSentryServiceRunner("")
+}
+
+// buildSOCKS5Dialer parses a socks5://[user:pass@]host:port URL and
+// returns a context-aware dialer function that routes every TCP dial
+// through that upstream SOCKS5. Used by the proxy code path for all
+// outbound TCP connections (CONNECT forward, SSLBump upstream dial,
+// SOCKS5 plain tunnel, transparent HTTPS handler).
+func buildSOCKS5Dialer(socksURL string) (func(ctx context.Context, network, addr string) (net.Conn, error), error) {
+	u, err := url.Parse(socksURL)
+	if err != nil {
+		return nil, fmt.Errorf("parse %q: %w", socksURL, err)
+	}
+	if u.Scheme != "socks5" && u.Scheme != "socks5h" {
+		return nil, fmt.Errorf("only socks5:// and socks5h:// are supported, got %q", u.Scheme)
+	}
+	var auth *proxy.Auth
+	if u.User != nil {
+		pw, _ := u.User.Password()
+		auth = &proxy.Auth{User: u.User.Username(), Password: pw}
+	}
+	d, err := proxy.SOCKS5("tcp", u.Host, auth, proxy.Direct)
+	if err != nil {
+		return nil, fmt.Errorf("socks5 %s: %w", u.Host, err)
+	}
+	ctxD, ok := d.(proxy.ContextDialer)
+	if !ok {
+		return nil, fmt.Errorf("socks5 %s: no context dialer", u.Host)
+	}
+	return ctxD.DialContext, nil
 }
 
 // Service setup.
@@ -268,6 +298,24 @@ func RunGateSentry() {
 		filters.SetEgressHTTPClient(egressClient)
 		gatesentryDnsFilter.SetEgressHTTPClient(egressClient)
 		gatesentryproxy.SetEgressHTTPClient(egressClient)
+	}
+
+	// Push the egress SOCKS5 upstream dialer into the proxy code path.
+	// When set, every TCP connection that the proxy listeners make on
+	// behalf of a client (CONNECT forward, SOCKS5 plain tunnel, SSLBump
+	// upstream dial, transparent HTTPS handler) goes through this SOCKS5.
+	// This is what makes egress_socks5 a true "network egress" — without
+	// it, the proxy would still dial the public internet directly.
+	if socksURL := R.GSSettings.Get("egress_socks5"); socksURL != "" {
+		if d, err := buildSOCKS5Dialer(socksURL); err == nil {
+			gatesentryproxy.SetUpstreamDialer(d)
+		} else {
+			log.Printf("[EGRESS] Failed to build SOCKS5 dialer from %q: %v", socksURL, err)
+		}
+		// DNS server uses the same URL for both SOCKS5 CONNECT (TCP) and
+		// SOCKS5 UDP ASSOCIATE (UDP). Set here so the forwarder's dial
+		// goes through the upstream SOCKS5 too.
+		gatesentryDnsServer.SetEgressSOCKS5(socksURL)
 	}
 
 	application.StartBonjour()

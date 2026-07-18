@@ -43,22 +43,40 @@ var unverifiedClientConfig = &tls.Config{
 var insecureHTTPTransport = &http.Transport{
 	TLSClientConfig:       unverifiedClientConfig,
 	Proxy:                 http.ProxyFromEnvironment,
-	Dial:                  dialer.Dial,
+	DialContext:           DialUpstream,
 	TLSHandshakeTimeout:   10 * time.Second,
 	ExpectContinueTimeout: 1 * time.Second,
 }
 
 var http2Transport = &http2.Transport{
 	DialTLS: func(network, addr string, cfg *tls.Config) (net.Conn, error) {
-		return tls.DialWithDialer(dialer, network, addr, cfg)
+		return dialUpstreamTLS(network, addr, cfg)
 	},
 }
 
 var insecureHTTP2Transport = &http2.Transport{
 	TLSClientConfig: unverifiedClientConfig,
 	DialTLS: func(network, addr string, cfg *tls.Config) (net.Conn, error) {
-		return tls.DialWithDialer(dialer, network, addr, cfg)
+		return dialUpstreamTLS(network, addr, cfg)
 	},
+}
+
+// dialUpstreamTLS dials the upstream via DialUpstream (which honours the
+// configured UpstreamDialer, e.g. an egress_socks5 SOCKS5 proxy), then
+// performs the TLS handshake on the resulting raw conn. Replaces
+// tls.DialWithDialer for paths that need to honour the SOCKS5 upstream.
+// Returns the *tls.Conn so callers can inspect the negotiated state.
+func dialUpstreamTLS(network, addr string, cfg *tls.Config) (*tls.Conn, error) {
+	raw, err := DialUpstream(context.Background(), network, addr)
+	if err != nil {
+		return nil, err
+	}
+	conn := tls.Client(raw, cfg)
+	if err := conn.Handshake(); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	return conn, nil
 }
 
 // A hardValidationTransport wraps another (insecure) RoundTripper and checks
@@ -314,7 +332,7 @@ func SSLBump(conn net.Conn, serverAddr, user, authUser string, r *http.Request, 
 	cachedCert := rt != nil
 
 	if !cachedCert {
-		serverConn, err := tls.Dial("tcp", serverAddr, &tls.Config{
+		serverConn, err := dialUpstreamTLS("tcp", serverAddr, &tls.Config{
 			ServerName:         serverName,
 			InsecureSkipVerify: false,
 			NextProtos:         []string{"h2", "http/1.1"},

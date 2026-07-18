@@ -22,14 +22,10 @@ import (
 var IProxy *GSProxy
 var MaxContentScanSize int64 = 1e7 // Reduced from 100MB to 10MB for low-spec hardware
 var DebugLogging = false           // Disable verbose logging for performance
-var dialer = &net.Dialer{
-	Timeout:   30 * time.Second,
-	KeepAlive: 30 * time.Second,
-}
 var ip6Loopback = net.ParseIP("::1")
 var httpTransport = &http.Transport{
 	Proxy:                 http.ProxyFromEnvironment,
-	Dial:                  dialer.Dial,
+	DialContext:           DialUpstream,
 	TLSHandshakeTimeout:   10 * time.Second,
 	ExpectContinueTimeout: 1 * time.Second,
 }

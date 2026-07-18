@@ -17,6 +17,7 @@ package gatesentryproxy
 // Cross-platform: same package as socks5.go, no kernel syscalls.
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log"
@@ -134,11 +135,12 @@ func handleSocks5HTTPSMITM(conn net.Conn, host, user string) {
 	SSLBump(conn, serverAddr, user, "", nil, passthru, IProxy, clientHello)
 }
 
-// dialUpstream opens a TCP connection to addr with conservative timeouts.
+// dialUpstream opens a TCP connection to addr via DialUpstream, which
+// honours the configured UpstreamDialer (e.g. an egress_socks5 SOCKS5
+// proxy) when set, otherwise dials directly with conservative timeouts.
 // Used by both the fallback tunnel and the passthrough-ClientHello path.
 func dialUpstream(addr string) (net.Conn, error) {
-	d := net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}
-	c, err := d.Dial("tcp", addr)
+	c, err := DialUpstream(context.Background(), "tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("socks5: dial %s: %w", addr, err)
 	}

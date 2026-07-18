@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -17,6 +18,7 @@ import (
 	gatesentry2storage "bitbucket.org/abdullah_irfan/gatesentryf/storage"
 	gatesentryTypes "bitbucket.org/abdullah_irfan/gatesentryf/types"
 	"github.com/miekg/dns"
+	"golang.org/x/net/proxy"
 )
 
 // normalizeResolver ensures the resolver address has a port suffix
@@ -59,6 +61,10 @@ var (
 	externalResolver = "8.8.8.8:53"
 	listenAddr       = "0.0.0.0"
 	listenPort       = "53"
+	// egressSOCKS5 is the upstream SOCKS5 proxy URL used for forwarding
+	// DNS queries to the external resolver. Empty = direct dial.
+	// Set by main.go after reading the `egress_socks5` setting.
+	egressSOCKS5 = ""
 	// RWMutex allows concurrent reads while blocking writes.
 	// Use RLock() for reading blockedDomains/exceptionDomains/internalRecords
 	// Use Lock() when updating these maps (in scheduler/filter initialization)
@@ -94,6 +100,14 @@ func init() {
 // GetListenAddr returns the current DNS listen address
 func GetListenAddr() string {
 	return listenAddr
+}
+
+// SetEgressSOCKS5 configures the upstream SOCKS5 proxy used for
+// forwarding DNS queries to the external resolver. Pass empty string
+// to disable. Called from main.go after reading the `egress_socks5`
+// runtime setting. Format: socks5://[user:pass@]host:port
+func SetEgressSOCKS5(socksURL string) {
+	egressSOCKS5 = socksURL
 }
 
 // SetListenAddr sets the DNS listen address
@@ -159,6 +173,7 @@ func StartDNSServer(basePath string, ilogger *gatesentryLogger.Log, blockedLists
 	logger = ilogger
 	logsPath = basePath + logsPath
 	SetExternalResolver(settings.Get("dns_resolver"))
+	egressSOCKS5 = settings.Get("egress_socks5")
 	// InitializeLogs()
 	// go gatesentryDnsFilter.InitializeBlockedDomains(&blockedDomains, &blockedLists)
 
@@ -465,6 +480,25 @@ func forwardDNSRequest(r *dns.Msg, useTCP bool) (*dns.Msg, error) {
 		c.Net = "tcp"
 	}
 
+	// If egress_socks5 is set, route the DNS query through the
+	// configured upstream SOCKS5 (SOCKS5 CONNECT for TCP, SOCKS5 UDP
+	// ASSOCIATE for UDP). This makes the DNS forwarder's outbound
+	// traffic honour the same `egress_socks5` setting as the rest of
+	// Gatesentry, so when the admin turns on egress SOCKS5, even the
+	// resolver queries that the proxy itself issues go through the
+	// upstream.
+	if egressSOCKS5 != "" {
+		udpConn, err := dialSOCKS5DNS(egressSOCKS5, externalResolver, useTCP)
+		if err != nil {
+			return nil, err
+		}
+		defer udpConn.Close()
+		_ = udpConn.SetDeadline(time.Now().Add(c.Timeout))
+		dnsConn := &dns.Conn{Conn: udpConn}
+		resp, _, err := c.ExchangeWithConn(r, dnsConn)
+		return resp, err
+	}
+
 	resp, _, err := c.Exchange(r, externalResolver)
 	if err != nil {
 		return nil, err
@@ -485,6 +519,36 @@ func forwardDNSRequest(r *dns.Msg, useTCP bool) (*dns.Msg, error) {
 	}
 
 	return resp, nil
+}
+
+// dialSOCKS5DNS opens a SOCKS5-tunnelled UDP or TCP connection to the
+// given target. For TCP we use a plain SOCKS5 CONNECT; for UDP we set
+// up a SOCKS5 UDP ASSOCIATE. Both come from the same egress_socks5
+// URL so the admin has a single knob.
+func dialSOCKS5DNS(socksURL, target string, useTCP bool) (net.Conn, error) {
+	u, err := url.Parse(socksURL)
+	if err != nil {
+		return nil, err
+	}
+	if u.Scheme != "socks5" && u.Scheme != "socks5h" {
+		return nil, fmt.Errorf("dns: only socks5:// and socks5h:// are supported, got %q", u.Scheme)
+	}
+	user := ""
+	pass := ""
+	if u.User != nil {
+		user = u.User.Username()
+		pass, _ = u.User.Password()
+	}
+	if useTCP {
+		// SOCKS5 CONNECT path
+		d, err := proxy.SOCKS5("tcp", u.Host, &proxy.Auth{User: user, Password: pass}, proxy.Direct)
+		if err != nil {
+			return nil, err
+		}
+		return d.Dial("tcp", target)
+	}
+	// SOCKS5 UDP ASSOCIATE path
+	return DialSOCKS5UDP(u.Host, target, user, pass)
 }
 
 // function that accepts two strings : domain and ip and returns an A record

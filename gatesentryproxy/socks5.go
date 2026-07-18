@@ -24,6 +24,7 @@ package gatesentryproxy
 // the ClientHello peek, matching what handleTransparentHTTPS does.
 
 import (
+	"context"
 	"encoding/binary"
 	"encoding/base64"
 	"fmt"
@@ -32,7 +33,6 @@ import (
 	"net"
 	"strconv"
 	"sync/atomic"
-	"time"
 )
 
 // ---- Package-level state (mirrors transparent_listener.go) ----
@@ -408,12 +408,12 @@ func handleSocks5Conn(conn net.Conn) {
 }
 
 // handleSocks5PlainTunnel dials the upstream and copies bytes in both
-// directions. This is the v1 behaviour, kept for non-443 targets and for
-// 443 targets where HTTPS MITM is disabled.
+// directions. The dial goes through DialUpstream, which honours the
+// configured UpstreamDialer (e.g. an egress_socks5 SOCKS5 proxy) when
+// set, otherwise dials directly.
 func handleSocks5PlainTunnel(conn net.Conn, host string, port uint16, user string) {
 	addr := net.JoinHostPort(host, strconv.Itoa(int(port)))
-	d := net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}
-	upstream, err := d.Dial("tcp", addr)
+	upstream, err := DialUpstream(context.Background(), "tcp", addr)
 	if err != nil {
 		LogProxyAction("socks5://"+addr, user, ProxyActionFilterError)
 		return
