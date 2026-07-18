@@ -57,6 +57,8 @@ const (
 	socks5AuthMethodUserPass = 0x02
 	socks5AuthNoAcceptable = 0xFF
 	socks5CmdConnect       = 0x01
+	socks5CmdBind          = 0x02
+	socks5CmdUDPAssociate  = 0x03
 	socks5AtypIPv4         = 0x01
 	socks5AtypDomain       = 0x03
 	socks5AtypIPv6         = 0x04
@@ -348,19 +350,41 @@ func handleSocks5Conn(conn net.Conn) {
 		log.Printf("[SOCKS5] request error: %v", err)
 		return
 	}
-	if cmd != socks5CmdConnect {
-		LogProxyAction("socks5://(unsupported-cmd)", user, ProxyActionBlockedUrl)
-		_ = socks5SendReply(conn, socks5RepCmdNotSupported)
+
+	// 4. Resolve the destination host. socks5AddrSpec.Host holds the FQDN for
+	// domain types and the stringified IP for IPv4/IPv6 types — either is
+	// fine for filter matching.
+	host := addr.Host
+	if host == "" {
+		_ = socks5SendReply(conn, socks5RepAddrNotSupported)
 		return
 	}
 
-	// 4. Filter chain (host-level). For HTTPS targets we re-run against the
-	// SNI after the ClientHello peek; for plain CONNECT this is the only
-	// filter pass.
-	host := addr.Host
+	// 5. Filter chain (host-level). For HTTPS CONNECT targets we re-run
+	// against the SNI after the ClientHello peek; for everything else this
+	// is the only filter pass.
 	urlStr := "socks5://" + net.JoinHostPort(host, strconv.Itoa(int(addr.Port)))
 	if !socks5EvalFilters(host, user, urlStr) {
 		_ = socks5SendReply(conn, socks5RepConnRefused)
+		return
+	}
+
+	// 6. Dispatch by command. CONNECT is handled inline; BIND /
+	// UDP_ASSOCIATE each hand off to a dedicated handler.
+	switch cmd {
+	case socks5CmdConnect:
+		// fall through to the CONNECT-specific code below.
+	case socks5CmdBind:
+		LogProxyAction("socks5://"+host, user, ProxyActionSSLDirect)
+		handleSocks5Bind(conn, host, addr.Port, user)
+		return
+	case socks5CmdUDPAssociate:
+		LogProxyAction("socks5://"+host, user, ProxyActionSSLDirect)
+		handleSocks5UDPAssociate(conn, host, addr.Port, user)
+		return
+	default:
+		LogProxyAction("socks5://(cmd=0x"+strconv.FormatUint(uint64(cmd), 16)+")", user, ProxyActionBlockedUrl)
+		_ = socks5SendReply(conn, socks5RepCmdNotSupported)
 		return
 	}
 
