@@ -103,6 +103,11 @@ mdns.default       = mdns.disabled
 mdns:depends("dns_enabled", "1")
 mdns.description   = translate("Has no effect when the built-in DNS server is disabled.")
 
+egress = s3:option(Value, "egress_socks5", translate("Egress SOCKS5 proxy"))
+egress.datatype = "string"
+egress.default  = ""
+egress.description = translate("Routes GateSentry's own outbound HTTP (blocklist downloads, AIA cert fetches, AI scanner) through this upstream SOCKS5 proxy. Format: socks5://[user:pass@]host:port. Empty = direct.")
+
 alo = s3:option(Flag, "admin_lan_only", translate("Restrict admin port to LAN (firewall rule)"))
 alo.default = alo.enabled
 

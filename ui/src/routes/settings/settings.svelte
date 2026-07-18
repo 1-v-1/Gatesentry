@@ -39,6 +39,15 @@
 
 <ConnectedCertificateComposed />
 
+<ConnectedSettingInput
+  keyName="egress_socks5"
+  title={$_("Egress SOCKS5 Proxy")}
+  labelText={$_("Egress SOCKS5 proxy URL")}
+  helperText={$_("Routes GateSentry's own outbound HTTP (blocklist downloads, AIA cert fetches, AI scanner) through this upstream SOCKS5 proxy. Format: socks5://[user:pass@]host:port. Empty = direct egress.")}
+  type="text"
+/>
+<br />
+
 <h3 style="margin-top: 24px;">{$_("Block Page")}</h3>
 <p style="font-size: 0.85rem; color: #525252; max-width: 720px;">
   {$_(

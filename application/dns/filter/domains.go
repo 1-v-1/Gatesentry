@@ -13,6 +13,23 @@ import (
 	gatesentryTypes "bitbucket.org/abdullah_irfan/gatesentryf/types"
 )
 
+// EgressHTTPClient is the *http.Client used for blocklist downloads. It is
+// installed by main.go before the DNS scheduler starts; if not installed,
+// falls back to http.DefaultClient (direct egress). Honours the
+// `egress_socks5` runtime setting.
+var EgressHTTPClient *http.Client = http.DefaultClient
+
+// SetEgressHTTPClient sets the egress HTTP client. Pass nil to reset to
+// http.DefaultClient. Called from main.go after the runtime reads the
+// `egress_socks5` setting.
+func SetEgressHTTPClient(c *http.Client) {
+	if c != nil {
+		EgressHTTPClient = c
+	} else {
+		EgressHTTPClient = http.DefaultClient
+	}
+}
+
 func InitializeFilters(blockedDomains *map[string]bool, blockedLists *[]string, internalRecords *map[string]string, exceptionDomains *map[string]bool, mutex *sync.RWMutex, settings *gatesentry2storage.MapStore, dnsinfo *gatesentryTypes.DnsServerInfo) {
 	// Hold write lock while replacing the maps to prevent race with readers
 	mutex.Lock()
@@ -108,7 +125,7 @@ func InitializeBlockedDomains(blockedDomains *map[string]bool, blocklists *[]str
 
 func fetchDomainsFromBlocklist(url string) ([]string, error) {
 	log.Println("[DNS] Downloading blocklist from:", url)
-	resp, err := http.Get(url)
+	resp, err := EgressHTTPClient.Get(url)
 	if err != nil {
 		log.Println("[DNS] [Error] downloading blocklist:", err)
 		return nil, err

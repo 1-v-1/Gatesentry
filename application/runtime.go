@@ -200,6 +200,11 @@ func (R *GSRuntime) Init() {
 	R.GSSettings.SetDefault("enable_dns_server", "true")
 	R.GSSettings.SetDefault("socks5_enabled", "true")
 	R.GSSettings.SetDefault("socks5_port", "10415")
+	// egress_socks5: empty = direct egress (no upstream proxy).
+	// When set, Gatesentry's own outbound HTTP calls (DNS blocklist
+	// downloads, AIA cert fetches, AI image scanner) go through this
+	// SOCKS5 proxy. Format: socks5://[user:pass@]host:port
+	R.GSSettings.SetDefault("egress_socks5", "")
 	// Use environment variable for DNS resolver if set, otherwise use default
 	// Environment variable takes precedence over stored settings to allow
 	// containerized/deployment-time configuration

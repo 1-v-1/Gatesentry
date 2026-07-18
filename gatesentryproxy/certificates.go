@@ -10,7 +10,6 @@ import (
 	"io/ioutil"
 	"log"
 	"math/big"
-	"net/http"
 )
 
 // loadCertificate loads the TLS certificate specified by certFile and keyFile
@@ -132,7 +131,7 @@ func validCert(cert *x509.Certificate, intermediates []*x509.Certificate) bool {
 			continue
 		}
 		log.Println("[SSL] Getting certificate from " + certURL)
-		resp, err := http.Get(certURL)
+		resp, err := EgressHTTPClient().Get(certURL)
 		if err == nil {
 			defer resp.Body.Close()
 		}

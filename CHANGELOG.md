@@ -1,5 +1,19 @@
 # CHANGELOG
 
+## v1.24.0 (19 Jul 2026)
+
+- SOCKS5 proxy listener on port 10415 (CONNECT + BIND + UDP_ASSOCIATE)
+  - Cross-platform, no kernel syscalls
+  - Username/password auth via existing R.AuthUsers (RFC 1929 subnegotiation)
+  - Full Gatesentry filter chain: UserAccess → TimeAccess → UrlAccess → RuleMatch
+  - HTTPS MITM via TLS ClientHello peek + SSLBump (when enable_https_filtering is on)
+  - BIND for FTP active mode and protocols that dial back to the client
+  - UDP ASSOCIATE for DNS-over-SOCKS, QUIC, torrent DHT
+- Egress SOCKS5 setting (`egress_socks5`): make Gatesentry's own outbound
+  HTTP calls (DNS blocklist download, AIA cert fetching, AI image scanner)
+  go through an upstream SOCKS5 proxy. Useful when running behind a
+  corporate firewall that requires all egress to traverse a proxy.
+
 ## v1.23.0 (17 May 2026)
 
 - WebSocket proxy support: ws:// connections now properly proxied via TCP tunnel

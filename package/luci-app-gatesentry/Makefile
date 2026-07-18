@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-gatesentry
-PKG_VERSION:=1.23.0
+PKG_VERSION:=1.24.0
 PKG_RELEASE:=1
 
 PKG_LICENSE:=MIT

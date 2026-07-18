@@ -16,6 +16,7 @@ import (
 	"fmt"
 
 	application "bitbucket.org/abdullah_irfan/gatesentryf"
+	gatesentryDnsFilter "bitbucket.org/abdullah_irfan/gatesentryf/dns/filter"
 	filters "bitbucket.org/abdullah_irfan/gatesentryf/filters"
 	gresponder "bitbucket.org/abdullah_irfan/gatesentryf/responder"
 	gatesentryWebserverEndpoints "bitbucket.org/abdullah_irfan/gatesentryf/webserver/endpoints"
@@ -30,7 +31,7 @@ var GSSOCKS5PORT = "10415"
 var GSWEBADMINPORT = "10786"
 var GSBASEDIR = ""
 var Baseendpointv2 = "https://www.gatesentryfilter.com/api/"
-var GATESENTRY_VERSION = "1.23.0"
+var GATESENTRY_VERSION = "1.24.0"
 var GS_BOUND_ADDRESS = ":"
 var R *application.GSRuntime
 
@@ -257,6 +258,17 @@ func RunGateSentry() {
 	}
 	R = application.Start(webadminport)
 	R.BoundAddress = &GS_BOUND_ADDRESS
+
+	// Push the egress SOCKS5 client (if configured) into the subpackages
+	// that make outbound HTTP calls. The dns/filter subpackage downloads
+	// blocklists; the filters subpackage POSTs images to the AI scanner;
+	// gatesentryproxy fetches AIA cert chains during TLS MITM. Without this
+	// wiring all three would default to http.DefaultClient (direct egress).
+	if egressClient := R.EgressHTTPClient(); egressClient != http.DefaultClient {
+		filters.SetEgressHTTPClient(egressClient)
+		gatesentryDnsFilter.SetEgressHTTPClient(egressClient)
+		gatesentryproxy.SetEgressHTTPClient(egressClient)
+	}
 
 	application.StartBonjour()
 	gatesentryproxy.InitProxy()

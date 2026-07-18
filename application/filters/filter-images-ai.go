@@ -17,6 +17,22 @@ import (
 	"golang.org/x/image/webp"
 )
 
+// EgressHTTPClient is the *http.Client used for outbound calls (currently
+// the AI image scanner POST). Installed by main.go from the
+// `egress_socks5` runtime setting; falls back to http.DefaultClient when
+// not installed.
+var EgressHTTPClient *http.Client = http.DefaultClient
+
+// SetEgressHTTPClient installs the egress HTTP client for this package.
+// Pass nil to reset to http.DefaultClient.
+func SetEgressHTTPClient(c *http.Client) {
+	if c != nil {
+		EgressHTTPClient = c
+	} else {
+		EgressHTTPClient = http.DefaultClient
+	}
+}
+
 type InferenceDetectionCategory struct {
 	Class string  `json:"class"`
 	Score float64 `json:"score"`
@@ -98,7 +114,7 @@ func FilterImagesAI(gafd *gatesentryproxy.GSContentFilterData, ai_service_url st
 		b.Bytes()
 		wr.Close()
 
-		resp, _ := http.Post(ai_service_url, wr.FormDataContentType(), &b)
+		resp, _ := EgressHTTPClient.Post(ai_service_url, wr.FormDataContentType(), &b)
 		if resp.StatusCode == http.StatusOK {
 			// bytesLength := len(*gafd.Content)
 			// convert bytes length to string
