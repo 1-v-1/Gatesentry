@@ -70,6 +70,8 @@ type TemporaryRuntime struct {
 	Logger                  *gatesentryLogger.Log
 	Reload                  func()
 	ReloadBlockPage         func()
+	GetRuntimeCapem         func() string
+	ReloadCACertificate     func() (string, string, error)
 }
 
 type InputArgs struct {
@@ -82,6 +84,8 @@ type InputArgs struct {
 	GetApplicationVersion   func() string
 	Reload                  func()
 	ReloadBlockPage         func()
+	GetRuntimeCapem         func() string
+	ReloadCACertificate     func() (string, string, error)
 }
 
 func NewTemporaryRuntime(args InputArgs) *TemporaryRuntime {
@@ -95,5 +99,7 @@ func NewTemporaryRuntime(args InputArgs) *TemporaryRuntime {
 		GetApplicationVersion:   args.GetApplicationVersion,
 		Reload:                  args.Reload,
 		ReloadBlockPage:         args.ReloadBlockPage,
+		GetRuntimeCapem:         args.GetRuntimeCapem,
+		ReloadCACertificate:     args.ReloadCACertificate,
 	}
 }

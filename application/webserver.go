@@ -55,6 +55,8 @@ func GSwebserverStart(port int) {
 		GetApplicationVersion:   R.GetApplicationVersion,
 		Reload:                  R.Init,
 		ReloadBlockPage:         R.ReloadBlockPage,
+		GetRuntimeCapem:         func() string { return R.GSSettings.Get("capem") },
+		ReloadCACertificate:     R.RegenerateCACertificate,
 	}
 	runtime := gatesentryWebserverTypes.NewTemporaryRuntime(runtimeArgs)
 

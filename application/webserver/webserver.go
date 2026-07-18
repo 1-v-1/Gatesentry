@@ -437,8 +437,12 @@ func RegisterEndpointsStartServer(
 	})
 
 	internalServer.Get("/api/certificate/info", authenticationMiddleware, func(w http.ResponseWriter, r *http.Request) {
-		output := gatesentryWebserverEndpoints.GetCertificateInfo(internalSettings)
+		output := gatesentryWebserverEndpoints.ApiCertificateInfo(logger, *runtime)
 		SendJSON(w, output)
+	})
+
+	internalServer.Post("/api/certificate/regenerate", authenticationMiddleware, func(w http.ResponseWriter, r *http.Request) {
+		gatesentryWebserverEndpoints.ApiCertificateRegenerate(w, r, *runtime)
 	})
 
 	internalServer.Get("/api/files/certificate", HttpHandlerFunc(func(w http.ResponseWriter, r *http.Request) {
