@@ -31,7 +31,7 @@ var GSSOCKS5PORT = "10415"
 var GSWEBADMINPORT = "10786"
 var GSBASEDIR = ""
 var Baseendpointv2 = "https://www.gatesentryfilter.com/api/"
-var GATESENTRY_VERSION = "1.24.0"
+var GATESENTRY_VERSION = "1.25.0"
 var GS_BOUND_ADDRESS = ":"
 var R *application.GSRuntime
 

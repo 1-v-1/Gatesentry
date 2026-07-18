@@ -1,5 +1,16 @@
 # CHANGELOG
 
+## v1.25.0 (19 Jul 2026)
+
+- CA certificate is now generated at first run (RSA-4096, 100-year
+  validity) instead of being a fixed embedded PEM that expired in
+  early 2027. Subject "CN=GateSentryFilter, O=GateSentry".
+- New endpoint POST /api/certificate/regenerate and web admin button
+  to roll the CA key (e.g. after a suspected compromise). Existing
+  clients that trusted the previous CA must reinstall the new one.
+- New endpoint GET /api/certificate/info returns the active CA's
+  subject, issuer, serial, validity window, and days_to_expiry.
+
 ## v1.24.0 (19 Jul 2026)
 
 - SOCKS5 proxy listener on port 10415 (CONNECT + BIND + UDP_ASSOCIATE)

@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=gatesentry
-PKG_VERSION:=1.24.0
+PKG_VERSION:=1.25.0
 PKG_RELEASE:=1
 
 PKG_SOURCE_PROTO:=skip
