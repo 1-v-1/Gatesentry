@@ -473,7 +473,7 @@ func isReverseDomain(domain string) bool {
 
 func forwardDNSRequest(r *dns.Msg, useTCP bool) (*dns.Msg, error) {
 	c := new(dns.Client)
-	c.Timeout = 3 * time.Second // Explicit timeout to prevent hanging under concurrent load
+	c.Timeout = 6 * time.Second // Explicit timeout. SOCKS5 UDP relay adds latency.
 
 	// Use TCP if requested (e.g., client connected via TCP)
 	if useTCP {
@@ -494,9 +494,27 @@ func forwardDNSRequest(r *dns.Msg, useTCP bool) (*dns.Msg, error) {
 		}
 		defer udpConn.Close()
 		_ = udpConn.SetDeadline(time.Now().Add(c.Timeout))
-		dnsConn := &dns.Conn{Conn: udpConn}
-		resp, _, err := c.ExchangeWithConn(r, dnsConn)
-		return resp, err
+		// Do the exchange manually: pack the message, write to the
+		// SOCKS5-wrapped conn, read the response, unpack. This sidesteps
+		// miekg/dns's internal UDPConn/ReadMsgUDP assumptions which don't
+		// apply to our net.Conn wrapper.
+		packed, err := r.Pack()
+		if err != nil {
+			return nil, err
+		}
+		if _, err := udpConn.Write(packed); err != nil {
+			return nil, err
+		}
+		buf := make([]byte, 65535)
+		n, err := udpConn.Read(buf)
+		if err != nil {
+			return nil, err
+		}
+		resp := new(dns.Msg)
+		if err := resp.Unpack(buf[:n]); err != nil {
+			return nil, err
+		}
+		return resp, nil
 	}
 
 	resp, _, err := c.Exchange(r, externalResolver)
