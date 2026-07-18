@@ -198,6 +198,8 @@ func (R *GSRuntime) Init() {
 	R.GSSettings.SetDefault("timezone", "Europe/Oslo")
 	R.GSSettings.SetDefault("enable_https_filtering", "false")
 	R.GSSettings.SetDefault("enable_dns_server", "true")
+	R.GSSettings.SetDefault("socks5_enabled", "true")
+	R.GSSettings.SetDefault("socks5_port", "10415")
 	// Use environment variable for DNS resolver if set, otherwise use default
 	// Environment variable takes precedence over stored settings to allow
 	// containerized/deployment-time configuration

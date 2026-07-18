@@ -19,5 +19,5 @@ RUN apk add --no-cache ca-certificates tzdata
 WORKDIR /usr/local/gatesentry
 COPY --from=go-builder /gatesentry-bin ./
 RUN mkdir -p /usr/local/gatesentry/gatesentry
-EXPOSE 53/udp 53/tcp 10413 10786
+EXPOSE 53/udp 53/tcp 10413 10415 10786
 ENTRYPOINT ["./gatesentry-bin"]

@@ -36,6 +36,15 @@ te = s:option(Flag, "transparent", translate("Enable transparent proxy"))
 te.default = te.enabled
 te:depends("enabled", "1")
 
+socks5e = s:option(Flag, "socks5_enabled", translate("Enable SOCKS5 proxy"))
+socks5e.default = socks5e.enabled
+socks5e:depends("enabled", "1")
+
+socks5p = s:option(Value, "socks5_port", translate("SOCKS5 proxy port"))
+socks5p.datatype = "port"
+socks5p.default  = "10415"
+socks5p:depends("socks5_enabled", "1")
+
 ba = s:option(Value, "bind_address", translate("Bind address"))
 ba.datatype = "ipaddr"
 ba.default  = "0.0.0.0"
@@ -106,10 +115,16 @@ function m.on_commit(map)
 	-- a single named instance.
 	local hp = map:formvalue("cbid.gatesentry.main.http_port") or "10413"
 	local ap = map:formvalue("cbid.gatesentry.main.admin_port") or "10786"
+	local sp = map:formvalue("cbid.gatesentry.main.socks5_port") or "10415"
 	if hp == ap then
 		map.proceed = false
 		map.error   = "ports_clash"
 		map.message = translate("HTTP proxy port and admin port must differ")
+	end
+	if hp == sp or ap == sp then
+		map.proceed = false
+		map.error   = "ports_clash"
+		map.message = translate("SOCKS5 port must differ from HTTP proxy and admin ports")
 	end
 end
 

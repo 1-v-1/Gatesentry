@@ -26,6 +26,7 @@ import (
 )
 
 var GSPROXYPORT = "10413"
+var GSSOCKS5PORT = "10415"
 var GSWEBADMINPORT = "10786"
 var GSBASEDIR = ""
 var Baseendpointv2 = "https://www.gatesentryfilter.com/api/"
@@ -101,6 +102,9 @@ func main() {
 	// /etc/config/gatesentry for OpenWrt deployments.
 	if v := os.Getenv("GS_PROXY_PORT"); v != "" {
 		GSPROXYPORT = v
+	}
+	if v := os.Getenv("GS_SOCKS5_PORT"); v != "" {
+		GSSOCKS5PORT = v
 	}
 	if v := os.Getenv("GS_WEBADMIN_PORT"); v != "" {
 		GSWEBADMINPORT = v
@@ -810,6 +814,39 @@ func RunGateSentry() {
 				log.Printf("[Transparent] Continuing without transparent proxy. Set GS_TRANSPARENT_PROXY=false to suppress this warning.")
 			} else {
 				gatesentryproxy.SetTransparentProxyEnabled(true)
+			}
+		}()
+	}
+
+	// SOCKS5 proxy listener. Cross-platform (no kernel syscalls). Disabled
+	// when the runtime setting "socks5_enabled" is "false", or when the env
+	// var GS_SOCKS5=false is set (parity with GS_TRANSPARENT_PROXY).
+	socks5Disabled := os.Getenv("GS_SOCKS5") == "false"
+	if socks5Disabled {
+		gatesentryproxy.SetSocks5Enabled(false)
+	} else if R != nil && R.GSSettings.Get("socks5_enabled") == "false" {
+		gatesentryproxy.SetSocks5Enabled(false)
+	}
+	// Port precedence: GS_SOCKS5_PORT env var > GSSettings.socks5_port > 10415.
+	// We only override GSSOCKS5PORT from the runtime store when no env var was
+	// supplied (env vars win). This mirrors how GS_PROXY_PORT is handled.
+	if _, envSet := os.LookupEnv("GS_SOCKS5_PORT"); !envSet {
+		if !socks5Disabled && R != nil {
+			if p := R.GSSettings.Get("socks5_port"); p != "" {
+				if port, err := strconv.Atoi(p); err == nil && port > 0 && port <= 65535 {
+					GSSOCKS5PORT = p
+					gatesentryproxy.SetSocks5Port(port)
+				}
+			}
+		}
+	}
+	if !socks5Disabled && gatesentryproxy.IsSocks5Enabled() {
+		go func() {
+			socksAddr := gatesentryproxy.ResolveSocks5Addr(GSSOCKS5PORT)
+			log.Printf("[SOCKS5] Starting SOCKS5 proxy server on %s", socksAddr)
+			if err := gatesentryproxy.StartSocks5Server(socksAddr); err != nil {
+				log.Printf("[SOCKS5] Warning: Could not start SOCKS5 proxy server: %v", err)
+				log.Printf("[SOCKS5] Continuing without SOCKS5 proxy. Set GS_SOCKS5=false to suppress this warning.")
 			}
 		}()
 	}

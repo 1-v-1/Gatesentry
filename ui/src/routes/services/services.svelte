@@ -18,3 +18,12 @@
   labelA="Not Running"
   labelB="Running"
 />
+
+<br />
+
+<ToggleComponent
+  settingName="socks5_enabled"
+  label="SOCKS5 Proxy"
+  labelA="Disabled"
+  labelB="Enabled"
+/>

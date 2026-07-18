@@ -36,7 +36,7 @@ func GSApiSettingsGET(requestedId string, settings *gatesentry2storage.MapStore)
 			value = string(valueJson)
 		}
 		return struct{ Value string }{Value: value}
-	case "blocktimes", "strictness", "timezone", "idemail", "enable_https_filtering", "capem", "keypem", "enable_dns_server", "dns_custom_entries", "ai_scanner_url", "enable_ai_image_filtering", "EnableUsers", "dns_resolver", "block_page_html":
+	case "blocktimes", "strictness", "timezone", "idemail", "enable_https_filtering", "capem", "keypem", "enable_dns_server", "dns_custom_entries", "ai_scanner_url", "enable_ai_image_filtering", "EnableUsers", "dns_resolver", "block_page_html", "socks5_enabled", "socks5_port":
 		value := settings.Get(requestedId)
 		return struct {
 			Key   string
@@ -98,7 +98,9 @@ func GSApiSettingsPOST(requestedId string, settings *gatesentry2storage.MapStore
 		requestedId == "strictness" ||
 		requestedId == "capem" ||
 		requestedId == "keypem" ||
-		requestedId == "dns_resolver" {
+		requestedId == "dns_resolver" ||
+		requestedId == "socks5_enabled" ||
+		requestedId == "socks5_port" {
 		settings.Update(requestedId, temp.Value)
 		if requestedId == "dns_resolver" {
 			gatesentryDnsServer.SetExternalResolver(temp.Value)

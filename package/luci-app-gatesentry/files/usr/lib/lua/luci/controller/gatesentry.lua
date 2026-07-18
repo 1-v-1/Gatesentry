@@ -18,7 +18,7 @@ function action_status()
 	local running = (sys.call("pidof gatesentry-bin >/dev/null 2>&1") == 0)
 
 	local ports = {}
-	for _, p in ipairs({10413, 10414, 10786}) do
+	for _, p in ipairs({10413, 10414, 10415, 10786}) do
 		local listening = (sys.call("ss -ltn 'sport = :%d' 2>/dev/null | grep -q LISTEN" % p) == 0)
 		table.insert(ports, { port = p, listening = listening })
 	end

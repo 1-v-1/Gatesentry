@@ -12,6 +12,7 @@ PROG=/usr/lib/gatesentry/run.sh
 
 start_service() {
 	local enabled http_port admin_port tp_port tp_enabled bind \
+	      socks5_enabled socks5_port \
 	      dns_enabled dns_port dns_addr dns_resolver \
 	      tz debug max_scan mdns admin_lan_only
 
@@ -27,6 +28,8 @@ start_service() {
 	config_get tp_port main transparent_port "10414"
 	config_get_bool tp_enabled main transparent 1
 	config_get bind main bind_address "0.0.0.0"
+	config_get_bool socks5_enabled main socks5_enabled 1
+	config_get socks5_port main socks5_port "10415"
 	config_get_bool dns_enabled main dns_enabled 0
 	config_get dns_port main dns_port "53"
 	config_get dns_addr main dns_addr "0.0.0.0"
@@ -60,6 +63,8 @@ start_service() {
 		GS_BOUND_ADDRESS="${bind}:" \
 		GS_TRANSPARENT_PROXY_PORT="$tp_port" \
 		GS_TRANSPARENT_PROXY="$([ "$tp_enabled" = "1" ] && echo true || echo false)" \
+		GS_SOCKS5="$([ "$socks5_enabled" = "1" ] && echo true || echo false)" \
+		GS_SOCKS5_PORT="$socks5_port" \
 		GATESENTRY_DNS_ADDR="$dns_addr" \
 		GATESENTRY_DNS_RESOLVER="$dns_resolver" \
 		GS_DEBUG_LOGGING="$([ "$debug" = "1" ] && echo true || echo false)" \
@@ -79,11 +84,12 @@ start_service() {
 	# First-install HTTP seed: write runtime settings that aren't env-driven
 	# (mdns_browser_enabled, enable_dns_server) via the web admin API. The
 	# binary's runtime.Reload() picks up the new values within seconds.
-	seed_runtime_settings "$admin_port" "$dns_enabled" "$mdns"
+	seed_runtime_settings "$admin_port" "$dns_enabled" "$mdns" "$socks5_enabled" "$socks5_port"
 }
 
 seed_runtime_settings() {
 	local admin_port="$1" dns_enabled="$2" mdns="$3"
+	local socks5_enabled="$4" socks5_port="$5"
 	local i tries=15
 	for i in $(seq 1 $tries); do
 		if curl -fsS -u admin:admin \
@@ -103,6 +109,27 @@ seed_runtime_settings() {
 		fi
 		sleep 1
 	done
+	# Sync UCI socks5_* into the runtime setting that main.go consults at
+	# startup. Only seed if the user changed the UCI value away from the
+	# binary default ("true") — otherwise the runtime default wins.
+	if [ "$socks5_enabled" = "0" ]; then
+		for i in $(seq 1 $tries); do
+			curl -fsS -u admin:admin \
+				-H "Content-Type: application/json" \
+				-d "{\"name\":\"socks5_enabled\",\"value\":\"false\"}" \
+				"http://127.0.0.1:${admin_port}/api/settings/set" >/dev/null 2>&1 && break
+			sleep 1
+		done
+	fi
+	if [ -n "$socks5_port" ] && [ "$socks5_port" != "10415" ]; then
+		for i in $(seq 1 $tries); do
+			curl -fsS -u admin:admin \
+				-H "Content-Type: application/json" \
+				-d "{\"name\":\"socks5_port\",\"value\":\"$socks5_port\"}" \
+				"http://127.0.0.1:${admin_port}/api/settings/set" >/dev/null 2>&1 && break
+			sleep 1
+		done
+	fi
 }
 
 service_triggers() {
