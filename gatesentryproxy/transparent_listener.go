@@ -273,21 +273,6 @@ func (l *TransparentProxyListener) handleTransparentHTTPS(conn net.Conn, origina
 	}
 }
 
-type prependConn struct {
-	net.Conn
-	buf    []byte
-	offset int
-}
-
-func (c *prependConn) Read(b []byte) (int, error) {
-	if c.offset < len(c.buf) {
-		n := copy(b, c.buf[c.offset:])
-		c.offset += n
-		return n, nil
-	}
-	return c.Conn.Read(b)
-}
-
 type dummyConn struct{}
 
 func (c *dummyConn) Read(b []byte) (n int, err error)  { return 0, io.EOF }

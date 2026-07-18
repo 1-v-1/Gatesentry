@@ -2,75 +2,81 @@ package gatesentryproxy
 
 // SOCKS5 proxy listener.
 //
-// This file wraps github.com/armon/go-socks5 with Gatesentry-specific hooks:
-//   - CredentialStore → drives IProxy.AuthHandler (re-uses R.AuthUsers)
-//   - RuleSet         → runs the full filter chain on CONNECT commands
-//                       (TimeAccess → UrlAccess → RuleMatch → IsExceptionUrl)
-//   - Dial            → plain TCP tunnel (v1); HTTPS MITM hook left for v2
+// We implement the SOCKS5 CONNECT framing ourselves (instead of depending on
+// github.com/armon/go-socks5) so that we have full control over the byte
+// stream — required for HTTPS MITM, where we must peek the TLS ClientHello
+// the client sends AFTER the SOCKS5 handshake and BEFORE forwarding bytes.
 //
-// The proxy log entries are emitted through LogProxyAction so they land in
-// the same buntdb-backed access log as the HTTP and transparent proxies,
-// with the same 7-day TTL.
+// The listener supports two connection kinds:
 //
-// Cross-platform: no kernel-specific syscalls. Unlike the transparent
-// listener, no //go:build linux stubs are needed.
+//   - HTTP / plain TCP CONNECT (any port): the conn is dialeed upstream and
+//     bytes are io.Copy'd in both directions. This is the v1 behaviour.
+//
+//   - HTTPS CONNECT (port 443) when IProxy.DoMitm(host) is true: the client's
+//     TLS ClientHello is peeked, the SNI is extracted, the rules/filters run
+//     a second time against the SNI, and SSLBump terminates TLS so Gatesentry
+//     can inspect the decrypted HTTP layer (text filter, content-type filter,
+//     rules, etc.) — same as the transparent HTTPS listener does.
+//
+// The full filter chain runs at SOCKS5-connect time against the destination
+// host (UserAccess → TimeAccess → UrlAccess → RuleMatch → IsExceptionUrl).
+// For HTTPS targets that pass, an additional SNI-based rule check runs after
+// the ClientHello peek, matching what handleTransparentHTTPS does.
 
 import (
-	"context"
+	"encoding/binary"
 	"encoding/base64"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"strconv"
-	"strings"
 	"sync/atomic"
 	"time"
-
-	gsSocks "github.com/armon/go-socks5"
 )
 
 // ---- Package-level state (mirrors transparent_listener.go) ----
 
 var (
-	socks5Enabled   = true
-	socks5Port      = 10415
-	socks5Running   atomic.Bool
-	socks5Server    *gsSocks.Server
-	socks5Listener  net.Listener
+	socks5Enabled  = true
+	socks5Port     = 10415
+	socks5Running  atomic.Bool
+	socks5Listener net.Listener
 )
 
-func IsSocks5Enabled() bool     { return socks5Enabled }
-func SetSocks5Enabled(b bool)   { socks5Enabled = b }
-func GetSocks5Port() int        { return socks5Port }
-func SetSocks5Port(p int)       { socks5Port = p }
-func IsSocks5Running() bool     { return socks5Running.Load() }
+func IsSocks5Enabled() bool   { return socks5Enabled }
+func SetSocks5Enabled(b bool) { socks5Enabled = b }
+func GetSocks5Port() int      { return socks5Port }
+func SetSocks5Port(p int)     { socks5Port = p }
+func IsSocks5Running() bool   { return socks5Running.Load() }
 
-// socks5UserFromCtx extracts the username negotiated during RFC 1929 auth, or
-// the empty string if the connection used NoAuth.
-func socks5UserFromCtx(req *gsSocks.Request) string {
-	if req == nil || req.AuthContext == nil || req.AuthContext.Payload == nil {
-		return ""
-	}
-	return req.AuthContext.Payload["Username"]
-}
+// SOCKS5 protocol constants.
+const (
+	socks5Ver              = 0x05
+	socks5AuthNoAuth       = 0x00
+	socks5AuthMethodUserPass = 0x02
+	socks5AuthNoAcceptable = 0xFF
+	socks5CmdConnect       = 0x01
+	socks5AtypIPv4         = 0x01
+	socks5AtypDomain       = 0x03
+	socks5AtypIPv6         = 0x04
+	socks5RepSuccess       = 0x00
+	socks5RepGeneralFailure = 0x01
+	socks5RepConnRefused    = 0x05
+	socks5RepCmdNotSupported = 0x07
+	socks5RepAddrNotSupported = 0x08
+)
 
-// ---- Credential store: validates SOCKS5 user/pass against R.AuthUsers ----
+// ---- Auth: validate SOCKS5 user/pass against R.AuthUsers ----
 
-// gsCredentialStore implements gsSocks.CredentialStore. The SOCKS5 library
-// gives us a cleartext (user, pass) tuple (RFC 1929); we reconstruct the
-// "Basic <b64>" header that R.IsUserValid already understands, so the
-// existing user store is reused without any schema change.
-type gsCredentialStore struct{}
-
-func (gsCredentialStore) Valid(user, pass string) bool {
+// socks5ValidateCreds validates a (user, pass) tuple from the SOCKS5 RFC 1929
+// subnegotiation against R.AuthUsers. The user/pass comes in cleartext from
+// the client; we reconstruct the "Basic <b64>" header that R.IsUserValid
+// already understands, so no user-model changes are needed.
+func socks5ValidateCreds(user, pass string) bool {
 	if IProxy == nil {
-		// No proxy wired yet → fail closed. The settings init order ensures
-		// IProxy is set before the listener starts, but defensive in case
-		// anyone calls NewSocks5Server earlier in init.
 		return false
 	}
-	// If gateway-level auth is disabled, permit all SOCKS5 credentials.
-	// Otherwise, validate against the configured users.
 	if IProxy.IsAuthEnabled != nil && !IProxy.IsAuthEnabled() {
 		return true
 	}
@@ -81,168 +87,333 @@ func (gsCredentialStore) Valid(user, pass string) bool {
 	return IProxy.AuthHandler(raw)
 }
 
-// ---- Rule set: runs the Gatesentry filter chain on CONNECT ----
+// ---- Filter evaluation: shared between CONNECT and HTTPS paths ----
 
-// gsRuleSet implements gsSocks.RuleSet. go-socks5 invokes Allow() after
-// authentication and before Dial(), giving us the destination and user but
-// not yet any application-layer bytes — exactly the right moment to apply
-// the same filtering the HTTP proxy applies (main.go:262-399).
-type gsRuleSet struct{}
-
-func (gsRuleSet) Allow(ctx context.Context, req *gsSocks.Request) (context.Context, bool) {
+// socks5EvalFilters runs the full Gatesentry filter chain against the
+// destination host. Returns true if the CONNECT should proceed. On a false
+// return, the caller should emit a SOCKS5 failure reply.
+//
+// This is the same evaluation gsRuleSet.Allow did in v1 — extracted into a
+// plain function so both the CONNECT framing code and the HTTPS MITM path
+// can share it without an interface dependency.
+func socks5EvalFilters(host, user, urlStr string) bool {
 	if IProxy == nil {
-		return ctx, false
+		log.Printf("[SOCKS5] filter: IProxy nil — denying %s", urlStr)
+		return false
 	}
-	// Only CONNECT is supported. BIND / UDP_ASSOCIATE are not implemented.
-	if req.Command != gsSocks.ConnectCommand {
-		LogProxyAction("socks5://(unsupported-cmd)", socks5UserFromCtx(req), ProxyActionBlockedUrl)
-		return ctx, false
+	if DebugLogging {
+		log.Printf("[SOCKS5] filter: evaluating %s for user=%q", urlStr, user)
 	}
-
-	// Determine the host the client asked for. The library runs DNS resolve
-	// before us, so req.DestAddr may hold an IP; we want the original FQDN
-	// for filter matching (URL blocklists / rules match by name, not IP).
-	host := req.DestAddr.FQDN
-	if host == "" {
-		if req.DestAddr.IP != nil {
-			host = req.DestAddr.IP.String()
-		}
-	}
-	if host == "" {
-		return ctx, false
-	}
-	user := socks5UserFromCtx(req)
-	urlStr := "socks5://" + host
-
 	// 1. User access (is the user blocked from internet?)
 	if IProxy.UserAccessHandler != nil {
 		ud := &GSUserAccessFilterData{User: user}
 		IProxy.UserAccessHandler(ud)
+		if DebugLogging {
+			log.Printf("[SOCKS5] filter: UserAccessHandler action=%q", ud.FilterResponseAction)
+		}
 		if ud.FilterResponseAction == ProxyActionBlockedInternetForUser {
 			LogProxyAction(urlStr, user, ProxyActionBlockedInternetForUser)
-			return ctx, false
+			return false
 		}
-		// UserNotFound is treated as "permit" for SOCKS5 — unlike HTTP, where
-		// missing users get a 407. Auth already happened at the SOCKS5 layer.
 	}
-
 	// 2. Time-of-day access (configured block windows)
 	if IProxy.TimeAccessHandler != nil {
 		td := &GSTimeAccessFilterData{Url: urlStr, User: user}
 		IProxy.TimeAccessHandler(td)
+		if DebugLogging {
+			log.Printf("[SOCKS5] filter: TimeAccessHandler action=%q", td.FilterResponseAction)
+		}
 		if td.FilterResponseAction == string(ProxyActionBlockedTime) {
 			LogProxyAction(urlStr, user, ProxyActionBlockedTime)
-			return ctx, false
+			return false
 		}
 	}
-
 	// 3. URL filter (configured URL block lists, e.g. blockedsites.json)
 	if IProxy.UrlAccessHandler != nil {
 		ud := &GSUrlFilterData{Url: urlStr, User: user}
 		IProxy.UrlAccessHandler(ud)
+		if DebugLogging {
+			log.Printf("[SOCKS5] filter: UrlAccessHandler action=%q", ud.FilterResponseAction)
+		}
 		if ud.FilterResponseAction == ProxyActionBlockedUrl {
 			LogProxyAction(urlStr, user, ProxyActionBlockedUrl)
-			return ctx, false
+			return false
+		}
+	}
+	// 4. Rule manager (web-admin-defined rules with priority + time window)
+	if shouldBlock, _, _ := CheckProxyRules(host, user); shouldBlock {
+		log.Printf("[SOCKS5] filter: CheckProxyRules BLOCKED %s user=%q", host, user)
+		LogProxyAction(urlStr, user, ProxyActionBlockedUrl)
+		return false
+	}
+	// 5. Whitelist — already permissive above, but call the hook for future
+	// extensions.
+	_ = IProxy.IsExceptionUrl
+	return true
+}
+
+// socks5ShouldMitm returns true if HTTPS MITM is enabled and the host should
+// be bumped. Mirrors the decision in handleTransparentHTTPS.
+func socks5ShouldMitm(host string) bool {
+	if IProxy == nil || IProxy.DoMitm == nil {
+		return false
+	}
+	return IProxy.DoMitm(host)
+}
+
+// ---- SOCKS5 framing ----
+
+// socks5ReadGreeting reads the SOCKS5 greeting (VER, NAUTH, METHODS) and
+// returns the chosen auth method. Returns 0xFF if no acceptable method.
+func socks5ReadGreeting(conn net.Conn) (uint8, error) {
+	header := make([]byte, 2)
+	if _, err := io.ReadFull(conn, header); err != nil {
+		return 0, err
+	}
+	if header[0] != socks5Ver {
+		return 0, fmt.Errorf("socks5: unsupported version %d", header[0])
+	}
+	nauth := int(header[1])
+	if nauth == 0 {
+		return 0, fmt.Errorf("socks5: zero auth methods")
+	}
+	methods := make([]byte, nauth)
+	if _, err := io.ReadFull(conn, methods); err != nil {
+		return 0, err
+	}
+	authEnabled := IProxy != nil && IProxy.IsAuthEnabled != nil && IProxy.IsAuthEnabled()
+	// Pick the only method that makes sense given the server's auth state.
+	// Don't fall back across modes — that would silently reject clients
+	// sending only NoAuth when auth is enabled (and vice versa).
+	var want uint8 = socks5AuthNoAuth
+	if authEnabled {
+		want = socks5AuthMethodUserPass
+	}
+	for _, m := range methods {
+		if m == want {
+			return want, nil
+		}
+	}
+	return socks5AuthNoAcceptable, nil
+}
+
+// socks5SendGreetingReply sends the method-selection reply.
+func socks5SendGreetingReply(conn net.Conn, method uint8) error {
+	_, err := conn.Write([]byte{socks5Ver, method})
+	return err
+}
+
+// socks5DoAuthUserPass implements the RFC 1929 username/password subnegotiation.
+// Writes 01 STATUS at the end (00 = success, 01 = failure).
+// On success returns (user, nil). On failure returns ("", err).
+func socks5DoAuthUserPass(conn net.Conn) (string, error) {
+	ver := make([]byte, 1)
+	if _, err := io.ReadFull(conn, ver); err != nil {
+		return "", err
+	}
+	if ver[0] != 0x01 {
+		return "", fmt.Errorf("socks5 userpass: unsupported subnegotiation version %d", ver[0])
+	}
+	ulenByte := make([]byte, 1)
+	if _, err := io.ReadFull(conn, ulenByte); err != nil {
+		return "", err
+	}
+	ulen := int(ulenByte[0])
+	uname := make([]byte, ulen)
+	if _, err := io.ReadFull(conn, uname); err != nil {
+		return "", err
+	}
+	plenByte := make([]byte, 1)
+	if _, err := io.ReadFull(conn, plenByte); err != nil {
+		return "", err
+	}
+	plen := int(plenByte[0])
+	pass := make([]byte, plen)
+	if _, err := io.ReadFull(conn, pass); err != nil {
+		return "", err
+	}
+	user := string(uname)
+	ok := socks5ValidateCreds(user, string(pass))
+	status := byte(0x00)
+	if !ok {
+		status = 0x01
+	}
+	if _, err := conn.Write([]byte{0x01, status}); err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", fmt.Errorf("socks5 userpass: auth failed for user=%q", user)
+	}
+	return user, nil
+}
+
+// socks5AddrSpec mirrors AddrSpec from the SOCKS5 spec.
+type socks5AddrSpec struct {
+	Host string // FQDN for domain types, IPv4/IPv6 string otherwise
+	Port uint16
+}
+
+// socks5ReadRequest reads VER, CMD, RSV, ATYP, DST.ADDR, DST.PORT. Returns
+// the parsed request, or an error.
+func socks5ReadRequest(conn net.Conn) (cmd uint8, addr socks5AddrSpec, err error) {
+	header := make([]byte, 4)
+	if _, err = io.ReadFull(conn, header); err != nil {
+		return 0, socks5AddrSpec{}, err
+	}
+	if header[0] != socks5Ver {
+		return 0, socks5AddrSpec{}, fmt.Errorf("socks5 request: unsupported version %d", header[0])
+	}
+	cmd = header[1]
+	switch header[3] {
+	case socks5AtypIPv4:
+		ip := make([]byte, 4)
+		if _, err = io.ReadFull(conn, ip); err != nil {
+			return 0, socks5AddrSpec{}, err
+		}
+		addr.Host = net.IP(ip).String()
+	case socks5AtypIPv6:
+		ip := make([]byte, 16)
+		if _, err = io.ReadFull(conn, ip); err != nil {
+			return 0, socks5AddrSpec{}, err
+		}
+		addr.Host = net.IP(ip).String()
+	case socks5AtypDomain:
+		lenByte := make([]byte, 1)
+		if _, err = io.ReadFull(conn, lenByte); err != nil {
+			return 0, socks5AddrSpec{}, err
+		}
+		domain := make([]byte, int(lenByte[0]))
+		if _, err = io.ReadFull(conn, domain); err != nil {
+			return 0, socks5AddrSpec{}, err
+		}
+		addr.Host = string(domain)
+	default:
+		return 0, socks5AddrSpec{}, fmt.Errorf("socks5 request: unsupported ATYP %d", header[3])
+	}
+	portBytes := make([]byte, 2)
+	if _, err = io.ReadFull(conn, portBytes); err != nil {
+		return 0, socks5AddrSpec{}, err
+	}
+	addr.Port = binary.BigEndian.Uint16(portBytes)
+	return cmd, addr, nil
+}
+
+// socks5SendReply writes a SOCKS5 reply with the given REP code.
+// BND.ADDR/BND.PORT are zero — clients only care about the REP byte.
+func socks5SendReply(conn net.Conn, rep uint8) error {
+	_, err := conn.Write([]byte{
+		socks5Ver, rep, 0x00,
+		socks5AtypIPv4,
+		0, 0, 0, 0, // BND.ADDR = 0.0.0.0
+		0, 0, // BND.PORT = 0
+	})
+	return err
+}
+
+// ---- Connection handler ----
+
+// handleSocks5Conn processes a single SOCKS5 client connection: greeting,
+// auth, request, filter chain, and dispatch to the appropriate upstream
+// handler (HTTPS MITM or plain TCP tunnel).
+func handleSocks5Conn(conn net.Conn) {
+	defer conn.Close()
+
+	// 1. Greeting.
+	method, err := socks5ReadGreeting(conn)
+	if err != nil {
+		log.Printf("[SOCKS5] greeting error: %v", err)
+		return
+	}
+	if method == socks5AuthNoAcceptable {
+		_ = socks5SendGreetingReply(conn, socks5AuthNoAcceptable)
+		return
+	}
+	if err := socks5SendGreetingReply(conn, method); err != nil {
+		return
+	}
+
+	// 2. Auth subnegotiation.
+	var user string
+	if method == socks5AuthMethodUserPass {
+		user, err = socks5DoAuthUserPass(conn)
+		if err != nil {
+			log.Printf("[SOCKS5] auth error: %v", err)
+			return
 		}
 	}
 
-	// 4. Rule manager (web-admin-defined rules with priority + time window)
-	if shouldBlock, _, _ := CheckProxyRules(host, user); shouldBlock {
-		LogProxyAction(urlStr, user, ProxyActionBlockedUrl)
-		return ctx, false
+	// 3. Request.
+	cmd, addr, err := socks5ReadRequest(conn)
+	if err != nil {
+		log.Printf("[SOCKS5] request error: %v", err)
+		return
+	}
+	if cmd != socks5CmdConnect {
+		LogProxyAction("socks5://(unsupported-cmd)", user, ProxyActionBlockedUrl)
+		_ = socks5SendReply(conn, socks5RepCmdNotSupported)
+		return
 	}
 
-	// 5. Exception URL list (whitelist) — already permissive above, but we
-	// still consult the hook so admin can later make it have stronger effect.
-	_ = IProxy.IsExceptionUrl
+	// 4. Filter chain (host-level). For HTTPS targets we re-run against the
+	// SNI after the ClientHello peek; for plain CONNECT this is the only
+	// filter pass.
+	host := addr.Host
+	urlStr := "socks5://" + net.JoinHostPort(host, strconv.Itoa(int(addr.Port)))
+	if !socks5EvalFilters(host, user, urlStr) {
+		_ = socks5SendReply(conn, socks5RepConnRefused)
+		return
+	}
 
-	// CONNECT granted. The library will proceed to Dial and then io.Copy.
-	return ctx, true
+	// 5. Dispatch.
+	if addr.Port == 443 && socks5ShouldMitm(host) {
+		// HTTPS with MITM enabled for this host. Send the SOCKS5 success
+		// reply first so the client starts the TLS handshake, then run the
+		// MITM flow (ClientHello peek → SSLBump).
+		if err := socks5SendReply(conn, socks5RepSuccess); err != nil {
+			return
+		}
+		handleSocks5HTTPSMITM(conn, host, user)
+		return
+	}
+
+	// Plain TCP tunnel.
+	if err := socks5SendReply(conn, socks5RepSuccess); err != nil {
+		return
+	}
+	handleSocks5PlainTunnel(conn, host, addr.Port, user)
 }
 
-// ---- Dial hook ----
-
-// socks5Dial is the upstream dial used by go-socks5. v1 keeps it as a plain
-// TCP tunnel — the destination's hostname has already been filtered by
-// gsRuleSet above, so CONNECT itself is safe. Application-layer content
-// filtering for HTTPS-via-SOCKS5 is a v2 concern; the insertion point is
-// this function: replace the plain net.Dial with a peek-then-SSLBump flow
-// modelled on handleTransparentHTTPS() in transparent_listener.go.
-func socks5Dial(ctx context.Context, network, addr string) (net.Conn, error) {
-	if DebugLogging {
-		log.Printf("[SOCKS5] Dialing upstream %s", addr)
-	}
+// handleSocks5PlainTunnel dials the upstream and copies bytes in both
+// directions. This is the v1 behaviour, kept for non-443 targets and for
+// 443 targets where HTTPS MITM is disabled.
+func handleSocks5PlainTunnel(conn net.Conn, host string, port uint16, user string) {
+	addr := net.JoinHostPort(host, strconv.Itoa(int(port)))
 	d := net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}
-	return d.DialContext(ctx, network, addr)
-}
-
-// ---- Server construction + lifecycle ----
-
-// NewSocks5Server assembles a go-socks5 Server wired to Gatesentry's
-// filter chain. Safe to call before IProxy is set (we just store the
-// references; hooks will no-op until IProxy is wired).
-func NewSocks5Server() *gsSocks.Server {
-	conf := &gsSocks.Config{
-		// AuthMethods: explicit list to advertise both NoAuth and UserPassAuth.
-		// SOCKS5 clients will pick one based on what the server offers.
-		AuthMethods: []gsSocks.Authenticator{
-			gsSocks.NoAuthAuthenticator{},
-			gsSocks.UserPassAuthenticator{Credentials: gsCredentialStore{}},
-		},
-		Rules: gsRuleSet{},
-		Dial:  socks5Dial,
-		Logger: log.New(log.Writer(), "[socks5] ", log.LstdFlags),
-	}
-	srv, err := gsSocks.New(conf)
+	upstream, err := d.Dial("tcp", addr)
 	if err != nil {
-		log.Printf("[SOCKS5] Failed to construct server: %v", err)
-		return nil
+		LogProxyAction("socks5://"+addr, user, ProxyActionFilterError)
+		return
 	}
-	return srv
+	defer upstream.Close()
+
+	// Best-effort log on tunnel establishment.
+	LogProxyAction("socks5://"+addr, user, ProxyActionSSLDirect)
+
+	done := make(chan struct{}, 2)
+	go func() {
+		_, _ = io.Copy(upstream, conn)
+		done <- struct{}{}
+	}()
+	go func() {
+		_, _ = io.Copy(conn, upstream)
+		done <- struct{}{}
+	}()
+	<-done
 }
 
-// StartSocks5Server binds a TCP listener and serves on it. Caller is
-// expected to run this in its own goroutine. Returns immediately with nil
-// once the listener is bound; the goroutine then blocks on Serve().
-func StartSocks5Server(addr string) error {
-	if !socks5Enabled {
-		log.Printf("[SOCKS5] Disabled by configuration; not starting.")
-		return nil
-	}
-	srv := NewSocks5Server()
-	if srv == nil {
-		return fmt.Errorf("socks5: failed to build server")
-	}
+// ---- Server lifecycle ----
 
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		return fmt.Errorf("socks5: failed to bind %s: %w", addr, err)
-	}
-	socks5Listener = ln
-	socks5Server = srv
-	socks5Running.Store(true)
-	log.Printf("[SOCKS5] Listening on %s", addr)
-
-	return srv.Serve(ln)
-}
-
-// StopSocks5Server closes the listener; in-flight connections keep running
-// because go-socks5 doesn't expose a graceful-shutdown hook.
-func StopSocks5Server() error {
-	socks5Running.Store(false)
-	if socks5Listener != nil {
-		err := socks5Listener.Close()
-		socks5Listener = nil
-		return err
-	}
-	return nil
-}
-
-// ---- Convenience used by main.go at boot ----
-
-// ResolveSocks5Addr returns the listen address for the SOCKS5 listener,
-// honouring the env var GS_SOCKS5_PORT override and the package-level
-// Socks5Port / Socks5Enabled switches.
+// ResolveSocks5Addr returns the listen address for the SOCKS5 listener.
 func ResolveSocks5Addr(envPort string) string {
 	port := socks5Port
 	if envPort != "" {
@@ -251,9 +422,48 @@ func ResolveSocks5Addr(envPort string) string {
 			socks5Port = p
 		}
 	}
-	addr := "0.0.0.0:" + strconv.Itoa(port)
-	if !strings.Contains(addr, ":") {
-		addr = "0.0.0.0:" + addr
+	return "0.0.0.0:" + strconv.Itoa(port)
+}
+
+// StartSocks5Server binds a TCP listener and serves on it. Each connection
+// is handled in its own goroutine. Returns nil after the listener is bound;
+// the goroutine then loops forever.
+func StartSocks5Server(addr string) error {
+	if !socks5Enabled {
+		log.Printf("[SOCKS5] Disabled by configuration; not starting.")
+		return nil
 	}
-	return addr
+
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("socks5: failed to bind %s: %w", addr, err)
+	}
+	socks5Listener = ln
+	socks5Running.Store(true)
+	log.Printf("[SOCKS5] Listening on %s", addr)
+
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				if socks5Running.Load() {
+					log.Printf("[SOCKS5] Accept error: %v", err)
+				}
+				return
+			}
+			go handleSocks5Conn(c)
+		}
+	}()
+	return nil
+}
+
+// StopSocks5Server closes the listener; in-flight connections keep running.
+func StopSocks5Server() error {
+	socks5Running.Store(false)
+	if socks5Listener != nil {
+		err := socks5Listener.Close()
+		socks5Listener = nil
+		return err
+	}
+	return nil
 }
