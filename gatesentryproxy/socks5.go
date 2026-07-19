@@ -25,8 +25,8 @@ package gatesentryproxy
 
 import (
 	"context"
-	"encoding/binary"
 	"encoding/base64"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"log"
@@ -52,20 +52,20 @@ func IsSocks5Running() bool   { return socks5Running.Load() }
 
 // SOCKS5 protocol constants.
 const (
-	socks5Ver              = 0x05
-	socks5AuthNoAuth       = 0x00
-	socks5AuthMethodUserPass = 0x02
-	socks5AuthNoAcceptable = 0xFF
-	socks5CmdConnect       = 0x01
-	socks5CmdBind          = 0x02
-	socks5CmdUDPAssociate  = 0x03
-	socks5AtypIPv4         = 0x01
-	socks5AtypDomain       = 0x03
-	socks5AtypIPv6         = 0x04
-	socks5RepSuccess       = 0x00
-	socks5RepGeneralFailure = 0x01
-	socks5RepConnRefused    = 0x05
-	socks5RepCmdNotSupported = 0x07
+	socks5Ver                 = 0x05
+	socks5AuthNoAuth          = 0x00
+	socks5AuthMethodUserPass  = 0x02
+	socks5AuthNoAcceptable    = 0xFF
+	socks5CmdConnect          = 0x01
+	socks5CmdBind             = 0x02
+	socks5CmdUDPAssociate     = 0x03
+	socks5AtypIPv4            = 0x01
+	socks5AtypDomain          = 0x03
+	socks5AtypIPv6            = 0x04
+	socks5RepSuccess          = 0x00
+	socks5RepGeneralFailure   = 0x01
+	socks5RepConnRefused      = 0x05
+	socks5RepCmdNotSupported  = 0x07
 	socks5RepAddrNotSupported = 0x08
 )
 
@@ -159,6 +159,15 @@ func socks5EvalFilters(host, user, urlStr string) bool {
 func socks5ShouldMitm(host string) bool {
 	if IProxy == nil || IProxy.DoMitm == nil {
 		return false
+	}
+	return IProxy.DoMitm(host).ShouldMITM
+}
+
+// socks5Decision returns the full MITMDecision for the host so callers can
+// also detect blackhole (ShouldBlock) outcomes from the MITM list.
+func socks5Decision(host string) MITMDecision {
+	if IProxy == nil || IProxy.DoMitm == nil {
+		return MITMDecision{}
 	}
 	return IProxy.DoMitm(host)
 }
@@ -389,15 +398,24 @@ func handleSocks5Conn(conn net.Conn) {
 	}
 
 	// 5. Dispatch.
-	if addr.Port == 443 && socks5ShouldMitm(host) {
-		// HTTPS with MITM enabled for this host. Send the SOCKS5 success
-		// reply first so the client starts the TLS handshake, then run the
-		// MITM flow (ClientHello peek → SSLBump).
-		if err := socks5SendReply(conn, socks5RepSuccess); err != nil {
+	if addr.Port == 443 {
+		decision := socks5Decision(host)
+		if decision.ShouldBlock {
+			log.Printf("[SOCKS5] Blocking %s by MITM decision (%s)", host, decision.Reason)
+			LogProxyAction("https://"+host, user, ProxyActionBlockedUrl)
+			sendBlockMessageOverConn(conn, decision.BlockPage)
 			return
 		}
-		handleSocks5HTTPSMITM(conn, host, user)
-		return
+		if decision.ShouldMITM {
+			// HTTPS with MITM enabled for this host. Send the SOCKS5 success
+			// reply first so the client starts the TLS handshake, then run the
+			// MITM flow (ClientHello peek → SSLBump).
+			if err := socks5SendReply(conn, socks5RepSuccess); err != nil {
+				return
+			}
+			handleSocks5HTTPSMITM(conn, host, user)
+			return
+		}
 	}
 
 	// Plain TCP tunnel.

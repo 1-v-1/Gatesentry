@@ -1,0 +1,23 @@
+{
+  "MITMList_AddEntry": "新增条目",
+  "MITMList_Action": "动作",
+  "MITMList_ActionFilter": "过滤（MITM 并检查）",
+  "MITMList_ActionPassthrough": "透传（不进行 MITM）",
+  "MITMList_ActionBlackhole": "拦截（黑洞）",
+  "MITMList_Description": "按正则匹配的条目，优先级高于全局 SSL 检查开关。优先级数字小的优先。Filter 表示 MITM 并检查，Passthrough 表示跳过 MITM，Blackhole 表示返回 block page 并关闭连接。",
+  "MITMList_DescriptionPlaceholder": "可选描述",
+  "MITMList_Enabled": "启用",
+  "MITMList_Entry": "条目",
+  "MITMList_Matched": "命中",
+  "MITMList_Name": "名称",
+  "MITMList_NoMatch": "没有条目命中此主机——回落至全局开关。",
+  "MITMList_Priority": "优先级",
+  "MITMList_PriorityHelp": "数字越小，优先级越高。相同优先级按创建时间排序。",
+  "MITMList_Regex": "正则表达式",
+  "MITMList_RegexHelp": "对主机名做不区分大小写的正则匹配（如 .*\\.example\\.com）",
+  "MITMList_RemoveEntry": "删除条目",
+  "MITMList_SaveEntry": "保存条目",
+  "MITMList_Test": "测试",
+  "MITMList_TestHost": "测试主机名",
+  "MITMList_Title": "MITM 列表"
+}

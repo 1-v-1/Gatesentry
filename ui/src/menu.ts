@@ -11,6 +11,7 @@ import {
   UserAccess,
   Rule,
   Devices,
+  ListChecked,
 } from "carbon-icons-svelte";
 
 let menuItems = [
@@ -92,6 +93,12 @@ let menuItems = [
     text: "Rules",
     href: "/rules",
     icon: Rule,
+  },
+  {
+    type: "link",
+    text: "MITMList_Title",
+    href: "/mitmlist",
+    icon: ListChecked,
   },
   {
     type: "link",

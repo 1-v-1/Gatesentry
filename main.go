@@ -17,16 +17,17 @@ import (
 	"time"
 
 	application "bitbucket.org/abdullah_irfan/gatesentryf"
-	gatesentryDnsServer "bitbucket.org/abdullah_irfan/gatesentryf/dns/server"
 	gatesentryDnsFilter "bitbucket.org/abdullah_irfan/gatesentryf/dns/filter"
+	gatesentryDnsServer "bitbucket.org/abdullah_irfan/gatesentryf/dns/server"
 	filters "bitbucket.org/abdullah_irfan/gatesentryf/filters"
 	gresponder "bitbucket.org/abdullah_irfan/gatesentryf/responder"
+	GatesentryTypes "bitbucket.org/abdullah_irfan/gatesentryf/types"
 	gatesentryWebserverEndpoints "bitbucket.org/abdullah_irfan/gatesentryf/webserver/endpoints"
 	"bitbucket.org/abdullah_irfan/gatesentryproxy"
 	"github.com/jpillora/overseer"
-	"golang.org/x/net/proxy"
 	"github.com/kardianos/service"
 	"github.com/steakknife/devnull"
+	"golang.org/x/net/proxy"
 )
 
 var GSPROXYPORT = "10413"
@@ -34,7 +35,7 @@ var GSSOCKS5PORT = "10415"
 var GSWEBADMINPORT = "10786"
 var GSBASEDIR = ""
 var Baseendpointv2 = "https://www.gatesentryfilter.com/api/"
-var GATESENTRY_VERSION = "1.25.0"
+var GATESENTRY_VERSION = "1.26.0"
 var GS_BOUND_ADDRESS = ":"
 var R *application.GSRuntime
 
@@ -346,16 +347,61 @@ func RunGateSentry() {
 		}
 	}
 
-	ngp.DoMitm = func(host string) bool {
+	// buildMitmListBlockPage renders the Gatesentry block page used when a
+	// MITM-list entry matches with action=blackhole. We reuse the admin's
+	// custom block-page HTML if one is set, otherwise fall back to the stock
+	// template. The "Reasons" slice lets the user see *why* this connection
+	// was dropped.
+	buildMitmListBlockPage := func(entry *GatesentryTypes.MITMListEntry) []byte {
+		reasons := []string{"Blocked by MITM list entry: " + entry.Name}
+		if entry.Description != "" {
+			reasons = append(reasons, entry.Description)
+		}
+		page := gresponder.BuildGeneralResponsePage(reasons, -1, R.BlockPageHTML)
+		return []byte(page)
+	}
+
+	ngp.DoMitm = func(host string) gatesentryproxy.MITMDecision {
+		// Strip optional :port so list regexes match against hostname only.
+		bareHost, _, _ := net.SplitHostPort(host)
+		if bareHost == "" {
+			bareHost = host
+		}
+
+		// 1. MITM list wins. Decisions here are final — the list is
+		//    intentionally more specific than the global toggle.
+		if entry, ok := R.MITMListManager.MatchHost(bareHost); ok {
+			switch entry.Action {
+			case GatesentryTypes.MITMListActionFilter:
+				return gatesentryproxy.MITMDecision{
+					ShouldMITM: true,
+					Reason:     "mitm-list:filter:" + entry.Name,
+				}
+			case GatesentryTypes.MITMListActionPassthrough:
+				return gatesentryproxy.MITMDecision{
+					Reason: "mitm-list:passthrough:" + entry.Name,
+				}
+			case GatesentryTypes.MITMListActionBlackhole:
+				return gatesentryproxy.MITMDecision{
+					ShouldBlock: true,
+					BlockPage:   buildMitmListBlockPage(entry),
+					Reason:      "mitm-list:blackhole:" + entry.Name,
+				}
+			}
+		}
+
+		// 2. Fall through to the global toggle + legacy `url/https_dontbump`
+		//    suppression. Identical to the pre-MITM-List behaviour.
 		enable_filtering := R.GSSettings.Get("enable_https_filtering")
 		if enable_filtering == "true" {
 			responder := &gresponder.GSFilterResponder{Blocked: false}
-			application.RunFilter("url/https_dontbump", host, responder)
+			application.RunFilter("url/https_dontbump", bareHost, responder)
 			if responder.Blocked {
-				return false
+				return gatesentryproxy.MITMDecision{Reason: "global-dontbump"}
 			}
+			return gatesentryproxy.MITMDecision{ShouldMITM: true, Reason: "global-toggle"}
 		}
-		return enable_filtering == "true"
+		return gatesentryproxy.MITMDecision{Reason: "global-off"}
 	}
 
 	ngp.ContentSizeHandler = func(gafd gatesentryproxy.GSContentSizeFilterData) {

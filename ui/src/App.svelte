@@ -29,6 +29,7 @@
   import Users from "./routes/users/users.svelte";
   import Globalheader from "./components/globalheader.svelte";
   import Rules from "./routes/rules/rules.svelte";
+  import MITMList from "./routes/mitmlist/mitmlist.svelte";
   import Devices from "./routes/devices/devices.svelte";
   export let url = "";
 
@@ -131,6 +132,9 @@
         </Route>
         <Route path="/rules">
           <Rules />
+        </Route>
+        <Route path="/mitmlist">
+          <MITMList />
         </Route>
         <Route path="/devices">
           <Devices />

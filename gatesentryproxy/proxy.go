@@ -5,7 +5,6 @@ import (
 	"compress/gzip"
 	"crypto/tls"
 	"encoding/base64"
-	"fmt"
 	"io"
 	"log"
 	"net"
@@ -336,11 +335,27 @@ func (h ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		passthru.UserData = ruleMatch
 	}
 
-	shouldMitm := IProxy.DoMitm(r.URL.Host)
-
+	mitmDecision := IProxy.DoMitm(r.URL.Host)
 	if ruleMatched {
-		shouldMitm = ruleShouldMITM
+		// Rule match wins over the MITM list / global toggle — explicit
+		// rules are higher priority than a generic list decision. Block
+		// short-circuits up at proxy.go:~330 so we only land here for
+		// non-blocking rule matches.
+		mitmDecision = MITMDecision{ShouldMITM: ruleShouldMITM, Reason: "rule-override"}
 	}
+
+	// MITM-list / global-teller says blackhole: emit block page and drop,
+	// bypassing all subsequent MITM/rule logic. sendBlockMessageBytes
+	// hijacks the conn and does the synthetic TLS handshake for HTTPS.
+	if mitmDecision.ShouldBlock {
+		if DebugLogging {
+			log.Printf("[Proxy] Blocking %s by MITM decision (%s)", r.URL.String(), mitmDecision.Reason)
+		}
+		sendBlockMessageBytes(w, r, nil, mitmDecision.BlockPage, nil)
+		LogProxyAction(r.URL.String(), user, ProxyActionBlockedUrl)
+		return
+	}
+	shouldMitm := mitmDecision.ShouldMITM
 
 	if DebugLogging {
 		log.Println("Should MITM = ", shouldMitm, " currentAction = "+action, " for ", r.URL.String())
@@ -585,54 +600,50 @@ func sendBlockMessageBytes(w http.ResponseWriter, r *http.Request, resp *http.Re
 		}
 		defer conn.Close()
 		conn.Write([]byte("HTTP/1.1 200 OK\r\n\r\n"))
-
-		// clientHello, err := gsClientHello.ReadClientHello(conn)
-
-		tlsConfig, err := createSelfSignedTLSConfig()
-		if err != nil {
-			fmt.Println("[Proxy][Error:showBlockPage] Error creating self-signed certificate:", err)
-			conn.Close()
-			return
-		}
-
-		tlsConn := tls.Server(conn, tlsConfig)
-		err = tlsConn.Handshake()
-		if err != nil {
-			log.Println("[Proxy][Error:showBlockPage] Handshake failed:", err)
-			conn.Close()
-			return
-		}
-
-		_, err = tlsConn.Write([]byte("HTTP/1.1 403 Forbidden\r\n"))
-		if err != nil {
-			log.Println("[Proxy][Error:showBlockPage] writing to connection", err)
-			return
-		}
-		// CSP allows inline scripts/styles (admin's custom HTML may use them) and
-		// data-URI images (the default block icon), but blocks external sources.
-		_, err = tlsConn.Write([]byte("Content-Security-Policy: default-src 'self' 'unsafe-inline' data:; img-src 'self' data:\r\n"))
-		if err != nil {
-			log.Println("[Proxy][Error:showBlockPage] Error writing to connection", err)
-			conn.Close()
-			return
-		}
-		_, err = tlsConn.Write([]byte("Content-Type: text/html\r\n\r\n"))
-		if err != nil {
-			log.Println("[Proxy][Error:showBlockPage] Error writing to connection", err)
-			conn.Close()
-			return
-		}
-		_, err = tlsConn.Write(content)
-		if err != nil {
-			conn.Close()
-			return
-		}
-
-		tlsConn.Close()
+		sendBlockMessageOverConn(conn, content)
 	} else {
 		sendInsecureBlockBytes(w, r, resp, content, contentType)
 	}
 
+}
+
+// sendBlockMessageOverConn performs the post-CONNECT part of "ghost bump":
+// builds a self-signed server TLS config, shakes hands over the supplied
+// raw conn, then writes a synthetic 403 + block-page body. Used by:
+//   - sendBlockMessageBytes (CONNECT / HTTP path, after Hijack)
+//   - the transparent and SOCKS5 listeners when a MITM-list entry says
+//     action=blackhole
+//
+// The conn is closed when this function returns — callers must not reuse it.
+func sendBlockMessageOverConn(conn net.Conn, content []byte) {
+	tlsConfig, err := createSelfSignedTLSConfig()
+	if err != nil {
+		log.Printf("[Proxy][Error:sendBlockMessageOverConn] self-signed cert: %v", err)
+		return
+	}
+	tlsConn := tls.Server(conn, tlsConfig)
+	if err := tlsConn.Handshake(); err != nil {
+		log.Printf("[Proxy][Error:sendBlockMessageOverConn] handshake: %v", err)
+		return
+	}
+	defer tlsConn.Close()
+	// CSP allows inline scripts/styles (admin's custom HTML may use them) and
+	// data-URI images (the default block icon), but blocks external sources.
+	headers := []string{
+		"HTTP/1.1 403 Forbidden\r\n",
+		"Content-Security-Policy: default-src 'self' 'unsafe-inline' data:; img-src 'self' data:\r\n",
+		"Content-Type: text/html\r\n\r\n",
+	}
+	for _, h := range headers {
+		if _, err := tlsConn.Write([]byte(h)); err != nil {
+			log.Printf("[Proxy][Error:sendBlockMessageOverConn] write header: %v", err)
+			return
+		}
+	}
+	if _, err := tlsConn.Write(content); err != nil {
+		log.Printf("[Proxy][Error:sendBlockMessageOverConn] write body: %v", err)
+		return
+	}
 }
 
 // CheckProxyRules checks proxy rules for a given host and user.

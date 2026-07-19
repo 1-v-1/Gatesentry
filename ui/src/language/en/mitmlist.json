@@ -1,0 +1,23 @@
+{
+  "MITMList_AddEntry": "Add Entry",
+  "MITMList_Action": "Action",
+  "MITMList_ActionFilter": "Filter (MITM and inspect)",
+  "MITMList_ActionPassthrough": "Pass Through (no MITM)",
+  "MITMList_ActionBlackhole": "Block (Blackhole)",
+  "MITMList_Description": "Regex-matched entries that override the global SSL inspection toggle. Lower priority value wins. Filter entries MITM and inspect, Passthrough entries bypass MITM entirely, Blackhole entries drop the connection with a block page.",
+  "MITMList_DescriptionPlaceholder": "Optional description",
+  "MITMList_Enabled": "Enabled",
+  "MITMList_Entry": "Entry",
+  "MITMList_Matched": "Matched",
+  "MITMList_Name": "Name",
+  "MITMList_NoMatch": "No entry matches this host — falls through to the global toggle.",
+  "MITMList_Priority": "Priority",
+  "MITMList_PriorityHelp": "Lower number = higher precedence. Ties resolved by creation time.",
+  "MITMList_Regex": "Regex Pattern",
+  "MITMList_RegexHelp": "Case-insensitive regex matched against the host (e.g. .*\\.example\\.com)",
+  "MITMList_RemoveEntry": "Remove Entry",
+  "MITMList_SaveEntry": "Save Entry",
+  "MITMList_Test": "Test",
+  "MITMList_TestHost": "Test host",
+  "MITMList_Title": "MITM List"
+}

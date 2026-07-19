@@ -1,5 +1,27 @@
 # CHANGELOG
 
+## v1.26.0 (19 Jul 2026)
+
+- **MITM List** — a new feature alongside the existing global SSL
+  inspection toggle. Admins can now define a list of regex-matched
+  entries that take precedence over `enable_https_filtering`. Each
+  entry has one of three actions:
+  - **filter** — MITM the matching host and run the existing Gatesentry
+    filter pipeline against the cleartext request
+  - **passthrough** — bypass MITM and tunnel the connection through
+  - **blackhole** — drop the connection and serve the Gatesentry block
+    page (no MITM, just like connecting to the CA-signed synthetic TLS
+    handler)
+  - Lower priority value wins (ties broken by creation time)
+  - Disabled entries are preserved but skipped at match time
+  - Live regex test in the UI (`POST /api/mitmlist/test`)
+  - Backed by the same encrypted `MapStore` as Rules. Existing
+    installations without the `mitm_list` key see no change.
+- **Certificate download filename** changed from `certificate.pem` to
+  `certificate.crt` so desktop and mobile OSes recognise the file as
+  a CA certificate and prompt to install/trust it. The PEM body is
+  unchanged.
+
 ## v1.25.0 (19 Jul 2026)
 
 - CA certificate is now generated at first run (RSA-4096, 100-year

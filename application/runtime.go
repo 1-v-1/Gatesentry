@@ -78,10 +78,14 @@ type GSRuntime struct {
 	DNSServerChannel            chan int
 	BoundAddress                *string
 	DnsServerInfo               *GatesentryTypes.DnsServerInfo
+	// MITMListManager owns the regex-driven MITM allow/passthrough/blackhole
+	// list. Populated once at webserver startup before any request can hit
+	// the proxy hot path. Nil before webserver start.
+	MITMListManager *MITMListManager
 	// BlockPageHTML is the in-memory cache of the admin-supplied custom block
 	// page. Read on every proxy block event, so caching avoids re-parsing
 	// GSSettings JSON on the hot path. Refresh via ReloadBlockPage().
-	BlockPageHTML               string
+	BlockPageHTML string
 }
 
 func SetBaseDir(a string) {
@@ -138,7 +142,7 @@ func InitTasks() {
 				log.Println("Setting zoneinfo env variable")
 				zz := "C:\\Users\\dell\\Downloads\\gs\\zoneinfo.zip"
 				os.Setenv("ZONEINFO", zz)
-							syscall.Setenv("ZONEINFO", zz)
+				syscall.Setenv("ZONEINFO", zz)
 				log.Println(os.Getenv("ZONEINFO"))
 				log.Println(syscall.Getenv("ZONEINFO"))
 			} else {

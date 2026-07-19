@@ -31,13 +31,24 @@ type GSProxy struct {
 	TimeAccessHandler  func(*GSTimeAccessFilterData)
 	UrlAccessHandler   func(*GSUrlFilterData)
 	ProxyErrorHandler  func(*GSProxyErrorData)
-	DoMitm             func(host string) bool
+	DoMitm             func(host string) MITMDecision
 	IsExceptionUrl     func(url string) bool
 	IsAuthEnabled      func() bool
 	LogHandler         func(GSLogData)
 	RuleMatchHandler   func(domain string, user string) interface{} // Returns RuleMatch
 	Handlers           map[string][]*GSHandler
 	UsersCache         map[string]GSUserCached
+}
+
+// MITMDecision is the result of asking the proxy whether/how to MITM a host.
+// Call sites consult one struct instead of juggling booleans — see
+// application/main.go for the implementation and application/types for the
+// MITM list that drives filter/passthrough/blackhole outcomes.
+type MITMDecision struct {
+	ShouldMITM  bool   // true => run SSLBump + filter pipeline (existing pre-MITM-List behaviour when global toggle is on)
+	ShouldBlock bool   // true => emit BlockPage and drop the connection. Never combined with ShouldMITM=true.
+	BlockPage   []byte // body used when ShouldBlock=true. Sourced from the admin's block-page template.
+	Reason      string // short label, primarily for logs: e.g. "mitm-list:github", "global-toggle", "rule-override"
 }
 
 // For the refactored filter input

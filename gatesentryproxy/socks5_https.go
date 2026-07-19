@@ -106,7 +106,17 @@ func handleSocks5HTTPSMITM(conn net.Conn, host, user string) {
 	if serverName != "" {
 		mitmCheckHost = net.JoinHostPort(serverName, "443")
 	}
-	shouldMitm := socks5ShouldMitm(mitmCheckHost)
+	decision := socks5Decision(mitmCheckHost)
+	if decision.ShouldBlock {
+		logUrl := "https://" + host
+		if serverName != "" {
+			logUrl = "https://" + serverName
+		}
+		LogProxyAction(logUrl, user, ProxyActionBlockedUrl)
+		sendBlockMessageOverConn(conn, decision.BlockPage)
+		return
+	}
+	shouldMitm := decision.ShouldMITM
 	if !shouldMitm {
 		// Don't bump — replay ClientHello and tunnel.
 		logUrl := "https://" + host

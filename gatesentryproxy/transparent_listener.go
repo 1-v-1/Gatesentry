@@ -235,14 +235,27 @@ func (l *TransparentProxyListener) handleTransparentHTTPS(conn net.Conn, origina
 		passthru.UserData = ruleMatch
 	}
 
-	shouldMitm := false
+	mitmDecision := MITMDecision{}
 	if IProxy != nil && IProxy.DoMitm != nil {
 		mitmCheckHost := serverAddr
 		if serverName != "" {
 			mitmCheckHost = net.JoinHostPort(serverName, port)
 		}
-		shouldMitm = IProxy.DoMitm(mitmCheckHost)
+		mitmDecision = IProxy.DoMitm(mitmCheckHost)
 	}
+
+	if mitmDecision.ShouldBlock {
+		log.Printf("[Transparent][SNI] Blocking %s by MITM decision (%s)", serverAddr, mitmDecision.Reason)
+		logUrl := "https://" + serverAddr
+		if serverName != "" {
+			logUrl = "https://" + serverName
+		}
+		LogProxyAction(logUrl, user, ProxyActionBlockedUrl)
+		sendBlockMessageOverConn(realConn, mitmDecision.BlockPage)
+		return
+	}
+
+	shouldMitm := mitmDecision.ShouldMITM
 
 	if ruleMatch != nil {
 		shouldMitm = ruleShouldMitm

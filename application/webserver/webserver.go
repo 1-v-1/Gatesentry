@@ -245,6 +245,7 @@ func RegisterEndpointsStartServer(
 	port string,
 	internalSettings *gatesentry2storage.MapStore,
 	ruleManager gatesentryWebserverEndpoints.RuleManagerInterface,
+	mitmListManager gatesentryWebserverEndpoints.MITMListManagerInterface,
 	basePath string,
 ) {
 
@@ -447,7 +448,10 @@ func RegisterEndpointsStartServer(
 
 	internalServer.Get("/api/files/certificate", HttpHandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		output := gatesentryWebserverEndpoints.GetCertificateBytes(internalSettings)
-		w.Header().Set("Content-Disposition", "attachment; filename=certificate.pem")
+		// Most operating systems (Windows, macOS, iOS, Android) recognize
+		// .crt as a CA certificate and prompt to install/trust it. .pem
+		// works but isn't recognized by casual double-click workflows.
+		w.Header().Set("Content-Disposition", "attachment; filename=certificate.crt")
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.Write(output)
 	}))
@@ -487,6 +491,33 @@ func RegisterEndpointsStartServer(
 		gatesentryWebserverEndpoints.GSApiRuleTest(w, r)
 	})
 	log.Println("All rule endpoints registered successfully")
+
+	// Register MITM-list endpoints with authentication. Mirror the
+	// RuleManager wiring: manager is initialised once, then each route
+	// delegates to the appropriate handler. See handler_mitm_list.go for the
+	// interface contract and validation rules.
+	log.Println("Initializing MITM list manager...")
+	gatesentryWebserverEndpoints.InitMITMListManager(mitmListManager)
+	log.Println("MITM list manager initialized")
+
+	log.Println("Registering GET /api/mitmlist...")
+	internalServer.Get("/api/mitmlist", authenticationMiddleware, gatesentryWebserverEndpoints.GSApiMITMListGetAll)
+
+	log.Println("Registering POST /api/mitmlist...")
+	internalServer.Post("/api/mitmlist", authenticationMiddleware, gatesentryWebserverEndpoints.GSApiMITMListCreate)
+
+	log.Println("Registering GET /api/mitmlist/{id}...")
+	internalServer.Get("/api/mitmlist/{id}", authenticationMiddleware, gatesentryWebserverEndpoints.GSApiMITMListGet)
+
+	log.Println("Registering PUT /api/mitmlist/{id}...")
+	internalServer.Put("/api/mitmlist/{id}", authenticationMiddleware, gatesentryWebserverEndpoints.GSApiMITMListUpdate)
+
+	log.Println("Registering DELETE /api/mitmlist/{id}...")
+	internalServer.Delete("/api/mitmlist/{id}", authenticationMiddleware, gatesentryWebserverEndpoints.GSApiMITMListDelete)
+
+	log.Println("Registering POST /api/mitmlist/test...")
+	internalServer.Post("/api/mitmlist/test", authenticationMiddleware, gatesentryWebserverEndpoints.GSApiMITMListTest)
+	log.Println("All MITM list endpoints registered successfully")
 
 	// Device inventory endpoints
 	log.Println("Registering device API endpoints...")

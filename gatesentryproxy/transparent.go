@@ -105,10 +105,17 @@ func HandleTransparentHTTPS(conn net.Conn, h *ProxyHandler, originalDst string, 
 
 	serverAddr := net.JoinHostPort(host, port)
 
-	shouldMitm := false
+	decision := MITMDecision{}
 	if IProxy != nil && IProxy.DoMitm != nil {
-		shouldMitm = IProxy.DoMitm(serverAddr)
+		decision = IProxy.DoMitm(serverAddr)
 	}
+	if decision.ShouldBlock {
+		log.Printf("[Transparent] Blocking %s by MITM decision (%s)", serverAddr, decision.Reason)
+		LogProxyAction("https://"+serverAddr, user, ProxyActionBlockedUrl)
+		sendBlockMessageOverConn(conn, decision.BlockPage)
+		return
+	}
+	shouldMitm := decision.ShouldMITM
 
 	if shouldMitm {
 		if DebugLogging {

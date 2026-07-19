@@ -62,6 +62,15 @@ func GSwebserverStart(port int) {
 
 	// gatesentryWebserver.RegisterEndpoints(app, settings, &R.Filters, R.Logger, runtime, R.BoundAddress)
 
+	// Construct managers first so the proxy hot path (`main.go`'s `DoMitm`
+	// closure) sees the same instance the webserver hands to its handlers.
+	ruleManager := NewRuleManager(R.GSSettings)
+	mitmListManager := NewMITMListManager(R.GSSettings)
+
+	// Expose on the runtime so anything reading `R.MITMListManager` (notably
+	// `main.go`'s DoMitm) sees the live manager.
+	R.MITMListManager = mitmListManager
+
 	gatesentryWebserver.RegisterEndpointsStartServer(
 		&R.Filters,
 		runtime,
@@ -70,7 +79,8 @@ func GSwebserverStart(port int) {
 		R.BoundAddress,
 		strconv.Itoa(GSWebServerPort),
 		R.GSSettings,
-		NewRuleManager(R.GSSettings),
+		ruleManager,
+		mitmListManager,
 		basePath,
 	)
 
